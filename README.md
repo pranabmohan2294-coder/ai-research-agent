@@ -1,81 +1,108 @@
-# AI Research Agent — Sequential Multi-Agent Pipeline
+# AI Research Agent — Multi-Agent Orchestrator Pipeline
 
-A sequential 2-agent research pipeline with intent detection, live web search,
+A multi-agent research pipeline with an intelligent orchestrator, live web search,
 LangSmith observability, and a Streamlit UI.
 Part of a 30-day AI PM learning sprint — Week 3: AI Agents.
 
 ---
 
-## Live Demo
-
-Run locally at `http://localhost:8501` after setup.
-
----
-
 ## Architecture
 ```
-User input (topic)
+User query
       ↓
-Intent Detection (Python classifier — 7 intent types)
+Orchestrator — classifies intent, decides agents, sequential or parallel
       ↓
-Web Search (DuckDuckGo — live results, no API key)
+Read agents run automatically (no human checkpoint):
+  🔍 Web Researcher — live DuckDuckGo search
+  📊 Data Analyst — extracts numbers and structured data (optional)
       ↓
-Agent 1 — Researcher
-(synthesises web results into intent-aware structured report)
+Write agents require human approval:
+  ✍️ Writer — synthesises into final report
       ↓
-Human Checkpoint
-(review full research, approve or reject)
+Human reviews Writer output
       ↓
-Agent 2 — Summariser
-(generates intent-aware summary, PM section if relevant)
+  🔬 Critic — reviews report, identifies gaps
       ↓
-Final output — Summary + Research + Raw Search tabs
+If gaps found → 🔎 Gap Researcher fills them (max 1 feedback loop)
       ↓
-LangSmith (traces every LLM call with token counts + latency)
+Human reviews Critic output
+      ↓
+Final Report
 ```
 
 ---
 
-## Intent Detection
+## How the Orchestrator Works
 
-The pipeline automatically detects query intent and formats output accordingly.
-No configuration needed — works on any topic.
+The orchestrator analyses your query before any agent runs and decides:
 
-| Intent | Example query | Output format |
+| Decision | How |
+|---|---|
+| Intent | competitive_analysis / market_research / job_research / comparison / general_research |
+| Execution mode | sequential (each step needs previous output) or parallel (independent sources) |
+| Agents needed | which agents are required for this specific query |
+| Output format | competitive_report / comparison_table / market_report / research_report |
+
+---
+
+## Human-in-the-Loop — Read vs Write
+
+Human checkpoints only appear for write operations. Read operations run automatically.
+
+| Agent | Type | Checkpoint |
 |---|---|---|
-| Places | "Best places to visit in India" | Numbered list with description, best time, must-see |
-| Food | "What to eat in Tokyo" | Categorised dishes by meal type |
-| Shopping | "Things to buy for home" | Room-wise or category-wise list |
-| How-to | "How to set up a RAG pipeline" | Numbered steps with tips |
-| Compare | "LangGraph vs CrewAI" | Head-to-head table with verdict |
-| News | "Latest AI news today" | Chronological developments with sources |
-| General | "RAG pipelines in production" | 6-section research report |
+| Web Researcher | Read | No — runs automatically |
+| Parallel Researcher | Read | No — runs automatically |
+| Gap Researcher | Read | No — runs automatically |
+| Data Analyst | Read | No — runs automatically |
+| Writer | Write | Yes — you approve before it runs |
+| Critic | Write | Yes — you review output before continuing |
 
 ---
 
-## PM Section — Dynamic Inclusion
+## Critic Feedback Loop
 
-Agent 2 includes a "What a PM Should Know" section only when the topic
-is relevant to product management, technology, business, AI, or startups.
-Detected via Python keyword classifier — not LLM judgment.
-
-PM section appears for: AI, RAG, product, SaaS, startup, analytics, roadmap...
-PM section skipped for: travel, food, shopping, lifestyle topics...
+After the Critic runs, it extracts specific gap queries from its review.
+The orchestrator triggers a targeted Gap Researcher to fill those gaps.
+Maximum 1 feedback loop to prevent infinite cycles.
+```
+Critic identifies: "No market share data found"
+      ↓
+Gap Researcher searches: "AI coding assistants market share 2025"
+      ↓
+Writer updates report with new data
+```
 
 ---
 
-## Features
+## Output Formats
 
-- Live web search — DuckDuckGo retrieves real-time results (no API key needed)
-- Intent-aware output — 7 different prompt templates, each matching the query type
-- Streaming output — both agents write token by token to the screen in real time
-- Human-in-the-loop checkpoint — approve or reject research before Agent 2 runs
-- Collapsible sections — research expandable/collapsible throughout
-- Live state inspector — sidebar shows every state field updating in real time
-- Agent performance metrics — latency, token count, data source per agent
-- PM keyword classifier — deterministic section inclusion, not LLM judgment
-- LangSmith tracing — every LLM call traced with exact tokens and latency
-- Pipeline totals — combined latency, tokens, cost ($0.00 fully local)
+The Writer and Researcher use specialised templates per intent:
+
+**competitive_report** — Market overview, competitive map table, top 5 player deep-dives,
+market share data, whitespace analysis, PM recommendations
+
+**comparison_table** — Head-to-head table (10+ dimensions), when to choose each,
+hidden considerations, PM decision framework
+
+**market_report** — Market sizing, growth trends, key players, opportunities and risks
+
+**research_report** — Key findings, analysis, data and evidence, recommendations
+
+---
+
+## Tradeoffs — Documented
+
+| Dimension | Current | Production upgrade |
+|---|---|---|
+| LLM | llama3.2 local (3B) | Claude / GPT-4 hosted |
+| Search | DuckDuckGo snippets | Tavily full-page retrieval |
+| Parallelism | Simulated (Ollama queues) | True concurrent with hosted LLM |
+| State persistence | Streamlit session only | LangGraph checkpointer + DB |
+| Token counting | Word estimate (~20% off) | Actual tokeniser |
+| Feedback loops | Max 1 | Configurable |
+| Error handling | None | Retry + fallback per node |
+| Intent detection | LLM classifier | LLM + few-shot examples |
 
 ---
 
@@ -88,88 +115,67 @@ PM section skipped for: travel, food, shopping, lifestyle topics...
 | Web search | DuckDuckGo via ddgs (free, no API key) |
 | UI | Streamlit |
 | Observability | LangSmith (free tier) |
-| Memory | In-context via TypedDict state |
-| Cost | $0.00 — fully local, no paid API keys |
-
----
-
-## Evaluation — Current State
-
-| Dimension | Status |
-|---|---|
-| Grounding | Live web search — not training data |
-| Hallucination control | Prompt instructs agent to base answers on search results only |
-| Faithfulness score | Not yet measured — added in Day 20 |
-| Intent accuracy | Keyword-based classifier — deterministic |
-| PM relevance detection | Keyword-based classifier — deterministic |
-
----
-
-## Known Limitations
-
-- News intent returns limited results — DuckDuckGo snippets are brief
-- Token counts are word-based estimates, not exact tokeniser counts
-- LangSmith tracing requires valid API key in .env file
-- No retry logic — if Ollama times out, pipeline fails
-
----
-
-## Roadmap
-
-| Day | Feature |
-|---|---|
-| Day 18 | Sequential pipeline + Streamlit UI + human-in-the-loop ✓ |
-| Day 19 | LangSmith observability + live web search + intent detection ✓ |
-| Day 20 | 3-agent pipeline — Planner + Researcher + Writer |
-| Day 21 | MVP 3 submission — post-mortem + stress test |
+| State | In-context TypedDict + Streamlit session |
+| Cost | $0.00 — fully local |
 
 ---
 
 ## How to Run
 ```bash
-# 1. Install dependencies
-pip3 install langgraph==0.2.28 langchain-ollama==0.1.3 langchain-core==0.2.43 streamlit ddgs
+# Install dependencies
+pip3 install langgraph==0.2.28 langchain-ollama==0.1.3 langchain-core==0.2.43 streamlit ddgs python-dotenv
 
-# 2. Set up environment variables
+# Set up environment
 cp .env.example .env
-# Edit .env and add your LangSmith API key
+# Add your LangSmith API key to .env
 
-# 3. Make sure Ollama is running
+# Confirm Ollama is running
 ollama run llama3.2 "say hello"
 
-# 4. Run the Streamlit app
+# Run the 2-agent pipeline (Day 18-19)
 python3 -m streamlit run app_streamlit.py
+
+# Run the multi-agent orchestrator (Day 20)
+python3 -m streamlit run orchestrator_pipeline.py
 ```
-
----
-
-## Environment Variables
-
-Create a `.env` file in the project root:
-```
-LANGCHAIN_TRACING_V2=true
-LANGCHAIN_API_KEY=your_langsmith_key_here
-LANGCHAIN_PROJECT=ai-research-agent
-```
-
-Get a free LangSmith API key at smith.langchain.com.
 
 ---
 
 ## File Structure
 ```
-├── app_streamlit.py     # Main Streamlit app — full pipeline with UI
-├── agent_pipeline.py    # Original terminal version
-├── requirements.txt     # Python dependencies
-├── .env                 # API keys (not committed to git)
-├── .gitignore           # Excludes .env
+├── orchestrator_pipeline.py  # Day 20 — multi-agent orchestrator
+├── app_streamlit.py          # Day 18-19 — sequential 2-agent pipeline
+├── agent_pipeline.py         # Day 18 — original terminal version
+├── requirements.txt          # Python dependencies
+├── .env                      # API keys (not committed)
+├── .env.example              # Template for .env
 └── README.md
 ```
+
+---
+
+## Roadmap
+
+| Day | Feature | Status |
+|---|---|---|
+| Day 18 | Sequential 2-agent pipeline + Streamlit UI | ✓ Done |
+| Day 19 | LangSmith + live web search + intent detection | ✓ Done |
+| Day 20 | Multi-agent orchestrator + critic feedback loop | ✓ Done |
+| Day 21 | MVP 3 post-mortem + stress test + submission | Next |
+
+---
+
+## Known Limitations
+
+- llama3.2 hallucinates more than larger models — all outputs need review
+- DuckDuckGo returns snippets not full articles — market share data often missing
+- True parallel execution requires hosted LLM — Ollama queues local requests
+- No state persistence — closing browser loses all pipeline progress
+- Feedback loop capped at 1 to prevent runaway cost and latency
 
 ---
 
 ## Author
 
 Pranab Mohan
-AI Product Manager — 30-Day Learning Sprint
-Week 3: AI Agents and Multi-Agent Orchestration
+AI Product Manager

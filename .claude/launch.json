@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "AI Research Agent (Claude — claude-opus-4-6)",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "streamlit", "run", ".claude/worktrees/amazing-lamport/app_claude.py", "--server.port", "8502"],
+      "port": 8502
+    },
+    {
+      "name": "AI Research Agent (Ollama — llama3.2, original)",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "streamlit", "run", ".claude/worktrees/amazing-lamport/app_streamlit.py", "--server.port", "8501"],
+      "port": 8501
+    }
+  ]
+}
