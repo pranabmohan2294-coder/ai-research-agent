@@ -193,12 +193,6 @@ python3 -m streamlit run app_streamlit.py
 
 | Day | Feature | Status |
 |---|---|---|
-| Day 18 | Sequential 2-agent pipeline + Streamlit UI | ✓ |
-| Day 19 | LangSmith + live web search + intent detection | ✓ |
-| Day 20 | Multi-agent orchestrator + critic feedback loop | ✓ |
-| Day 21 | MVP 3 post-mortem + stress test + fixes | ✓ |
-| Day 22 | AI product strategy — build vs buy, defensibility | ✓ |
-| Day 23 | AI PRD — model card, eval criteria, fallback design | ✓ |
 | Day 24 | Claude API swap + Chroma persistence | Next |
 | Day 25 | Metrics dashboard | Upcoming |
 | Day 26 | Responsible AI + red-team report | Upcoming |
@@ -222,5 +216,4 @@ python3 -m streamlit run app_streamlit.py
 ## Author
 
 Pranab Mohan
-AI Product Manager — 30-Day Learning Sprint
-Week 4: Full-Stack AI Product Capstone
+AI Product Manager
