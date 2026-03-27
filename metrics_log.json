@@ -1,0 +1,22 @@
+[
+  {
+    "query": "Compare LangGraph vs CrewAI for production agents",
+    "intent": "comparison",
+    "pipeline_type": "research",
+    "entity_valid": true,
+    "agents_used": [
+      "web_researcher",
+      "writer",
+      "critic",
+      "gap_researcher"
+    ],
+    "total_latency": 50.8,
+    "total_tokens": 1039,
+    "critic_score": 7,
+    "writer_approved": true,
+    "hallucination_flagged": false,
+    "feedback_loop_used": true,
+    "timestamp": "2026-03-27T16:12:11.839735",
+    "run_id": "run_0001"
+  }
+]
