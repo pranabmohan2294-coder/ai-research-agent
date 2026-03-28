@@ -18,5 +18,91 @@
     "feedback_loop_used": true,
     "timestamp": "2026-03-27T16:12:11.839735",
     "run_id": "run_0001"
+  },
+  {
+    "query": "Analyse the competitive landscape for AI coding assistants in 2025",
+    "intent": "competitive_analysis",
+    "pipeline_type": "research",
+    "entity_valid": true,
+    "agents_used": [
+      "web_researcher",
+      "data_analyst",
+      "writer",
+      "critic"
+    ],
+    "total_latency": 82.3,
+    "total_tokens": 1499,
+    "critic_score": 8,
+    "writer_approved": true,
+    "hallucination_flagged": false,
+    "feedback_loop_used": false,
+    "cache_status": "miss",
+    "timestamp": "2026-03-28T14:52:00.362469",
+    "run_id": "run_0002"
+  },
+  {
+    "query": "Analyse the competitive landscape for AI coding assistants in 2025",
+    "intent": "competitive_analysis",
+    "pipeline_type": "research",
+    "entity_valid": true,
+    "agents_used": [
+      "web_researcher",
+      "data_analyst",
+      "writer",
+      "critic"
+    ],
+    "total_latency": 82.3,
+    "total_tokens": 1499,
+    "critic_score": 8,
+    "writer_approved": true,
+    "hallucination_flagged": false,
+    "feedback_loop_used": false,
+    "cache_status": "miss",
+    "timestamp": "2026-03-28T14:52:23.444455",
+    "run_id": "run_0003"
+  },
+  {
+    "query": "Analyse the competitive landscape for AI coding assistants in 2025",
+    "intent": "competitive_analysis",
+    "pipeline_type": "research",
+    "entity_valid": true,
+    "agents_used": [
+      "web_researcher",
+      "web_researcher",
+      "data_analyst",
+      "writer",
+      "critic"
+    ],
+    "total_latency": 26.6,
+    "total_tokens": 415,
+    "critic_score": -1,
+    "writer_approved": null,
+    "hallucination_flagged": false,
+    "feedback_loop_used": false,
+    "cache_status": "hit",
+    "timestamp": "2026-03-28T14:53:29.829609",
+    "run_id": "run_0004"
+  },
+  {
+    "query": "Analyse the competitive landscape for AI coding assistants in 2025",
+    "intent": "competitive_analysis",
+    "pipeline_type": "research",
+    "entity_valid": true,
+    "agents_used": [
+      "web_researcher",
+      "web_researcher",
+      "data_analyst",
+      "writer",
+      "critic"
+    ],
+    "total_latency": 26.6,
+    "total_tokens": 415,
+    "critic_score": -1,
+    "writer_approved": null,
+    "hallucination_flagged": false,
+    "feedback_loop_used": false,
+    "cache_status": "hit",
+    "timestamp": "2026-03-28T14:53:31.978304",
+    "run_id": "run_0005"
   }
 ]
