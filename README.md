@@ -10,6 +10,8 @@ a single entry point. Built as part of a 30-day AI PM learning sprint.
 ```
 User query
       ↓
+Chroma cache check — has this been researched before?
+      ↓
 Query Router — detects lifestyle vs research intent
       ↓
 Entity Validation — warns on fictional/unverifiable subjects
@@ -31,12 +33,33 @@ Intent Confirmation — shows interpreted intent before any agent runs
 │  🔎 Gap Researcher (read — auto, triggered by critic)│
 └─────────────────────────────────────────────────────┘
       ↓
+Results stored in Chroma (persistent research library)
+      ↓
 Metrics logged to metrics_log.json
       ↓
 LangSmith traces every LLM call
       ↓
 Final Report + Download
 ```
+
+---
+
+## Chroma Persistence — Research Library
+
+Every completed run is stored in Chroma as a vector. Before searching the web,
+the system checks if similar research already exists. This is the data flywheel —
+the system gets faster and more contextual with every run.
+
+### 3-Zone Retrieval
+
+| Zone | Distance | Age | Quality | Behaviour |
+|---|---|---|---|---|
+| Zone 1 — Cache hit | < 0.15 | Fresh (< 14d) | Score ≥ 5 | Skip web search — instant results |
+| Zone 2 — Hybrid | 0.15–0.40 | Any | Any | Use cache as context + run fresh search |
+| Zone 3 — Miss | > 0.40 | Any | Any | Full pipeline — ignore cache |
+
+**Age expiry:** Research older than 14 days is downgraded to Zone 2 even at Zone 1 distance.
+**Quality gate:** Critic score < 5 bypasses cache — low quality research not reused.
 
 ---
 
@@ -73,7 +96,6 @@ Identifies specific gaps (e.g. "no pricing data found")
       ↓
 Gap Researcher runs targeted search to fill gaps
       ↓
-Critic output updated
 Maximum 1 feedback loop — prevents infinite cycles
 ```
 
@@ -90,9 +112,8 @@ Every completed run logs to `metrics_log.json`:
 | Writer approval rate | % of writer outputs approved | > 85% |
 | Hallucination flag rate | % of runs with critic score < 6 | < 10% |
 | Entity validation rate | % of unverifiable queries flagged | > 90% |
+| Cache hit rate | % of queries served from Chroma | tracked |
 | Feedback loop rate | % of runs that triggered gap research | tracked |
-
-View live cumulative stats in the sidebar while running.
 
 ---
 
@@ -104,7 +125,7 @@ View live cumulative stats in the sidebar while running.
 - Intended use: research and synthesis of publicly available information
 - Not for: legal, financial, medical decisions or private individual research
 
-### Evaluation criteria (Day 23 PRD)
+### Evaluation criteria
 - Retrieval grounding rate > 80%
 - Hallucination rate < 10%
 - Latency p95 < 120s
@@ -113,9 +134,9 @@ View live cumulative stats in the sidebar while running.
 
 ### Fallback design
 - Model unavailable → llama3.2 local fallback (V2)
-- Search unavailable → Chroma cached research (V2)
+- Search unavailable → Chroma cached research (implemented)
 - Insufficient data → honest "not found" report (implemented)
-- Entity not found → warning + explicit confirmation required (implemented)
+- Entity not found → warning + explicit confirmation (implemented)
 
 ---
 
@@ -131,6 +152,7 @@ View live cumulative stats in the sidebar while running.
 | Feedback loops | Max 1 | Configurable per use case |
 | Error handling | None | Retry + exponential backoff per node |
 | Entity validation | Explicit fictional indicators only | Wikipedia + Crunchbase API lookup |
+| Cache expiry | 14-day fixed | Configurable per intent type |
 | Cost tracking | Word estimate | Helicone exact cost per run |
 
 ---
@@ -140,6 +162,8 @@ View live cumulative stats in the sidebar while running.
 | Component | Tool |
 |---|---|
 | LLM | Ollama llama3.2 (local, free) |
+| Vector DB | Chroma (persistent, HNSW indexing) |
+| Embeddings | all-MiniLM-L6-v2 (sentence-transformers) |
 | Web search | DuckDuckGo via ddgs (free, no API key) |
 | UI | Streamlit |
 | Observability | LangSmith (free tier) |
@@ -153,7 +177,7 @@ View live cumulative stats in the sidebar while running.
 ```bash
 # Install dependencies
 pip3 install langgraph==0.2.28 langchain-ollama==0.1.3 langchain-core==0.2.43 \
-             streamlit ddgs python-dotenv
+             streamlit ddgs python-dotenv chromadb sentence-transformers
 
 # Set up environment
 cp .env.example .env
@@ -168,8 +192,8 @@ python3 -m streamlit run orchestrator_pipeline.py
 # Check metrics stats
 python3 metrics_logger.py
 
-# Run the 2-agent lifestyle pipeline (legacy)
-python3 -m streamlit run app_streamlit.py
+# Check Chroma research library stats
+python3 chroma_manager.py
 ```
 
 ---
@@ -177,8 +201,10 @@ python3 -m streamlit run app_streamlit.py
 ## File Structure
 ```
 ├── orchestrator_pipeline.py  # Main app — unified entry point
+├── chroma_manager.py         # Chroma persistence — 3-zone retrieval
 ├── metrics_logger.py         # Run logging and stats aggregation
 ├── metrics_log.json          # Auto-generated — all run data
+├── chroma_db/                # Persistent vector store (gitignored)
 ├── app_streamlit.py          # Day 18-19 — 2-agent pipeline (legacy)
 ├── agent_pipeline.py         # Day 18 — terminal version (legacy)
 ├── requirements.txt          # Python dependencies
@@ -193,8 +219,14 @@ python3 -m streamlit run app_streamlit.py
 
 | Day | Feature | Status |
 |---|---|---|
-| Day 24 | Claude API swap + Chroma persistence | Next |
-| Day 25 | Metrics dashboard | Upcoming |
+| Day 18 | Sequential 2-agent pipeline + Streamlit UI | ✓ Done |
+| Day 19 | LangSmith + live web search + intent detection | ✓ Done |
+| Day 20 | Multi-agent orchestrator + critic feedback loop | ✓ Done |
+| Day 21 | MVP 3 post-mortem + stress test + fixes | ✓ Done |
+| Day 22 | AI product strategy — build vs buy, defensibility | ✓ Done |
+| Day 23 | AI PRD — model card, eval criteria, fallback design | ✓ Done |
+| Day 24 | Chroma persistence + 3-zone retrieval | ✓ Done |
+| Day 25 | Metrics dashboard | Next |
 | Day 26 | Responsible AI + red-team report | Upcoming |
 | Day 27-28 | Capstone build | Upcoming |
 | Day 29 | Launch — landing page + demo | Upcoming |
@@ -207,13 +239,15 @@ python3 -m streamlit run app_streamlit.py
 - llama3.2 hallucinates on unknown entities — entity validation partially mitigates
 - DuckDuckGo returns short snippets — market share data often missing
 - Ollama queues requests — no true parallelism on local setup
-- No state persistence — browser close loses all pipeline progress
+- No session persistence — browser close loses pipeline progress
 - Feedback loop capped at 1 — sufficient for V1, configurable in V2
-- Search query quality affects output significantly — generic queries return irrelevant results
+- Search query quality affects output — generic queries return irrelevant results
+- Chroma DB not gitignored yet — add `chroma_db/` to .gitignore
 
 ---
 
 ## Author
 
 Pranab Mohan
-AI Product Manager
+AI Product Manager — 30-Day Learning Sprint
+Week 4: Full-Stack AI Product Capstone
