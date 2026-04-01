@@ -980,23 +980,33 @@ if st.session_state.stage == "input":
             pipeline_type = detect_pipeline_type(query)
             entity_check  = validate_entity(query)
 
-            with st.spinner("Preparing your research..."):
-                try:
-                    cache_result = check_cache(query) if chroma_available() else {"status": "miss", "context": None}
-                except Exception:
-                    cache_result = {"status": "miss", "context": None}
+            progress = st.empty()
+            progress.info("Step 1 of 4 — Checking research library...")
+            try:
+                cache_result = check_cache(query) if chroma_available() else {"status": "miss", "context": None}
+            except Exception:
+                cache_result = {"status": "miss", "context": None}
 
-                if pipeline_type == "lifestyle":
-                    lifestyle_intent = detect_lifestyle_intent(query)
-                    plan = {
-                        "intent": lifestyle_intent,
-                        "pipeline_type": "lifestyle",
-                        "plain_english_summary": "Finding " + lifestyle_intent + " info for: " + query,
-                        "key_entities": []
-                    }
-                else:
-                    plan = classify_research_intent(query)
-                    plan["pipeline_type"] = "research"
+            if pipeline_type == "lifestyle":
+                progress.info("Step 2 of 4 — Detecting query type...")
+                lifestyle_intent = detect_lifestyle_intent(query)
+                plan = {
+                    "intent": lifestyle_intent,
+                    "pipeline_type": "lifestyle",
+                    "plain_english_summary": "Finding " + lifestyle_intent + " info for: " + query,
+                    "key_entities": []
+                }
+            else:
+                progress.info("Step 2 of 4 — Classifying research intent...")
+                plan = classify_research_intent(query)
+                plan["pipeline_type"] = "research"
+            progress.info("Step 3 of 4 — Building search plan...")
+            time.sleep(0.3)
+            progress.info("Step 4 of 4 — Starting pipeline...")
+            time.sleep(0.3)
+            progress.success("✓ Ready — launching research")
+            time.sleep(0.4)
+            progress.empty()
 
             st.session_state.plan = plan
             st.session_state.writer_approved = None
@@ -1481,19 +1491,21 @@ elif st.session_state.stage == "done":
     except Exception:
         pass
 
-    # Log metrics
-    try:
-        save_run({
-            "query": state.get("query"), "intent": state.get("intent"),
-            "pipeline_type": pt, "entity_valid": state.get("entity_valid", True),
-            "agents_used": agents_used, "total_latency": tl, "total_tokens": tt,
-            "critic_score": score, "writer_approved": st.session_state.get("writer_approved"),
-            "hallucination_flagged": score > 0 and score < 6,
-            "feedback_loop_used": state.get("feedback_loop_used", False),
-            "cache_status": cs,
-        })
-    except Exception:
-        pass
+    # Log metrics — guard against duplicate logging on re-render
+    if not st.session_state.get("run_logged", False):
+        try:
+            save_run({
+                "query": state.get("query"), "intent": state.get("intent"),
+                "pipeline_type": pt, "entity_valid": state.get("entity_valid", True),
+                "agents_used": agents_used, "total_latency": tl, "total_tokens": tt,
+                "critic_score": score, "writer_approved": st.session_state.get("writer_approved"),
+                "hallucination_flagged": score > 0 and score < 6,
+                "feedback_loop_used": state.get("feedback_loop_used", False),
+                "cache_status": cs,
+            })
+            st.session_state.run_logged = True
+        except Exception:
+            pass
 
     final = state.get("final_report","No report generated.")
 
