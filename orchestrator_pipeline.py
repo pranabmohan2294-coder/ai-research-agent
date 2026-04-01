@@ -1268,6 +1268,14 @@ elif st.session_state.stage == "running_agent":
         st.session_state.public_step = public_step
         st.subheader(get_step_label(public_step))
         st.caption(get_step_description(public_step))
+        agent_display = {
+            'web_researcher': 'Searching the web...',
+            'gap_researcher': 'Finding additional sources...',
+            'data_analyst':   'Extracting data and statistics...',
+            'writer':         'Writing and refining your report...',
+            'critic':         'Reviewing report quality...'
+        }
+        st.info(agent_display.get(next_agent, 'Working...'))
 
     placeholder = st.empty()
     start    = time.time()
@@ -1283,8 +1291,10 @@ elif st.session_state.stage == "running_agent":
         existing = state["agent_outputs"].get("web_researcher","")
         state["agent_outputs"]["web_researcher"] = existing + "\n\n=== GAP FILL ===\n" + output
 
-    if next_agent in ("writer","critic"):
+    if next_agent == "writer":
         state["final_report"] = output
+    elif next_agent == "critic":
+        state["critic_output"] = output
 
     if next_agent == "web_researcher":
         st.session_state.finding_output = output
