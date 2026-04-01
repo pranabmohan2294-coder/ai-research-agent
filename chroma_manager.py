@@ -26,9 +26,12 @@ MIN_QUALITY_SCORE    = 5      # critic score below this = don't use as cache
 # Embedder — same model as Week 1
 # ---------------------------
 
-print("[Chroma] Loading embedding model...")
-embedder = SentenceTransformer("all-MiniLM-L6-v2")
-print("[Chroma] Embedding model ready.")
+if CHROMA_AVAILABLE:
+    print("[Chroma] Loading embedding model...")
+    embedder = SentenceTransformer("all-MiniLM-L6-v2")
+    print("[Chroma] Embedding model ready.")
+else:
+    embedder = None
 
 # ---------------------------
 # Chroma client
