@@ -2,9 +2,14 @@ import os
 import json
 from datetime import datetime
 from typing import Optional
-import chromadb
-from chromadb.config import Settings
-from sentence_transformers import SentenceTransformer
+try:
+    import chromadb
+    from chromadb.config import Settings
+    from sentence_transformers import SentenceTransformer
+    CHROMA_AVAILABLE = True
+except Exception as e:
+    print('[Chroma] Not available on this environment:', str(e)[:80])
+    CHROMA_AVAILABLE = False
 
 # ---------------------------
 # Config
@@ -30,6 +35,8 @@ print("[Chroma] Embedding model ready.")
 # ---------------------------
 
 def get_collection():
+    if not CHROMA_AVAILABLE:
+        raise RuntimeError("Chroma not available")
     client = chromadb.PersistentClient(
         path=CHROMA_DIR,
         settings=Settings(anonymized_telemetry=False)
@@ -202,3 +209,7 @@ def get_chroma_stats() -> dict:
 
 if __name__ == "__main__":
     print("Chroma stats:", json.dumps(get_chroma_stats(), indent=2))
+
+
+def is_available():
+    return CHROMA_AVAILABLE

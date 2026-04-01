@@ -12,7 +12,7 @@ from typing import TypedDict, List, Dict
 from openai import OpenAI as NvidiaClient
 from ddgs import DDGS
 from metrics_logger import save_run, extract_critic_score, get_summary_stats
-from chroma_manager import check_cache, store_run, get_chroma_stats
+from chroma_manager import check_cache, store_run, get_chroma_stats, is_available as chroma_available
 from agent_comms_logger import log_handoff, get_comms_stats
 
 # ---------------------------
@@ -936,7 +936,10 @@ if st.session_state.stage == "input":
             entity_check  = validate_entity(query)
 
             with st.spinner("Checking research library and classifying intent..."):
-                cache_result = check_cache(query)
+                try:
+                    cache_result = check_cache(query) if chroma_available() else {"status": "miss", "context": None}
+                except Exception:
+                    cache_result = {"status": "miss", "context": None}
                 if pipeline_type == "lifestyle":
                     lifestyle_intent = detect_lifestyle_intent(query)
                     plan = {
