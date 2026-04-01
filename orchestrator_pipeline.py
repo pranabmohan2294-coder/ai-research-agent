@@ -9,7 +9,7 @@ import time
 import json
 import re
 from typing import TypedDict, List, Dict
-from langchain_ollama import ChatOllama
+from openai import OpenAI as NvidiaClient
 from ddgs import DDGS
 from metrics_logger import save_run, extract_critic_score, get_summary_stats
 from chroma_manager import check_cache, store_run, get_chroma_stats
@@ -42,7 +42,42 @@ class OrchestratorState(TypedDict):
 # LLM
 # ---------------------------
 
-llm = ChatOllama(model="llama3.2", temperature=0)
+nvidia_client = NvidiaClient(
+    base_url='https://integrate.api.nvidia.com/v1',
+    api_key=os.getenv('NVIDIA_API_KEY')
+)
+NVIDIA_MODEL = 'meta/llama-3.1-8b-instruct'
+
+class NvidiaLLM:
+    def invoke(self, prompt):
+        text = prompt if isinstance(prompt, str) else str(prompt)
+        completion = nvidia_client.chat.completions.create(
+            model=NVIDIA_MODEL,
+            messages=[{'role': 'user', 'content': text}],
+            temperature=0.2,
+            max_tokens=2048,
+            stream=False
+        )
+        class R:
+            content = completion.choices[0].message.content or ''
+        return R()
+
+    def stream(self, prompt):
+        text = prompt if isinstance(prompt, str) else str(prompt)
+        completion = nvidia_client.chat.completions.create(
+            model=NVIDIA_MODEL,
+            messages=[{'role': 'user', 'content': text}],
+            temperature=0.2,
+            max_tokens=2048,
+            stream=True
+        )
+        for chunk in completion:
+            if chunk.choices and chunk.choices[0].delta.content:
+                class C:
+                    content = chunk.choices[0].delta.content
+                yield C()
+
+llm = NvidiaLLM()
 
 # ---------------------------
 # Meta system message
