@@ -7,11 +7,13 @@ os.environ['LANGCHAIN_PROJECT'] = 'ai-research-agent'
 import streamlit as st
 import time
 import json
+import re
 from typing import TypedDict, List, Dict
 from langchain_ollama import ChatOllama
 from ddgs import DDGS
 from metrics_logger import save_run, extract_critic_score, get_summary_stats
 from chroma_manager import check_cache, store_run, get_chroma_stats
+from agent_comms_logger import log_handoff, get_comms_stats
 
 # ---------------------------
 # State
@@ -43,6 +45,55 @@ class OrchestratorState(TypedDict):
 llm = ChatOllama(model="llama3.2", temperature=0)
 
 # ---------------------------
+# Meta system message
+# ---------------------------
+
+META_SYSTEM = (
+    "You are a specialist agent in PM Intel, an AI competitive intelligence "
+    "system for product managers.\n\n"
+    "Rules that apply to ALL agents:\n"
+    "1. Never invent facts, companies, or data not in your inputs\n"
+    "2. Cite sources for every specific claim using [Source: URL]\n"
+    "3. Write 'not found in sources' when data is unavailable\n"
+    "4. Stay within the geographic and topical scope of the original query\n"
+    "5. Another agent will review your output — accuracy over completeness\n"
+    "6. The final reader is a product manager making real business decisions\n"
+)
+
+AGENT_PERSONAS = {
+    "web_researcher": (
+        "Your role: retrieve and synthesise factual information from "
+        "search results only. Do not broaden the query scope."
+    ),
+    "data_analyst": (
+        "Your role: extract and structure quantitative data from research. "
+        "If no numbers exist — say so explicitly. Never estimate."
+    ),
+    "writer": (
+        "Your role: synthesise research into a structured PM report. "
+        "Every claim must cite a source. The Critic reviews your output next."
+    ),
+    "critic": (
+        "Your role: quality-control the Writer's report. "
+        "You are the last agent before the human sees the output. "
+        "Flag exact claims that lack citations or seem invented."
+    ),
+    "gap_researcher": (
+        "Your role: fill specific data gaps identified by the Critic. "
+        "Search only for the missing information."
+    )
+}
+
+def build_prompt(agent_role, query, core_prompt):
+    persona = AGENT_PERSONAS.get(agent_role, "")
+    return (
+        "[SYSTEM]\n" + META_SYSTEM + "\n"
+        "[YOUR ROLE]\n" + persona + "\n\n"
+        "[QUERY CONTEXT]\n" + query + "\n\n"
+        "[TASK]\n" + core_prompt
+    )
+
+# ---------------------------
 # Read vs Write
 # ---------------------------
 
@@ -59,40 +110,55 @@ FICTIONAL_INDICATORS = [
     "pretend", "invented", "test company", "example company"
 ]
 
-def validate_entity(query: str) -> dict:
+def validate_entity(query):
     if any(w in query.lower() for w in FICTIONAL_INDICATORS):
-        return {"valid": False,
-                "reason": "Query contains fictional indicator."}
+        return {"valid": False, "reason": "Query contains fictional indicator."}
     try:
         with DDGS() as ddgs:
             results = list(ddgs.text(query, max_results=3, region='wt-wt'))
         if not results:
-            return {"valid": False,
-                    "reason": f"No web results for '{query}'."}
+            return {"valid": False, "reason": "No web results found."}
         return {"valid": True, "reason": "Entity found"}
     except Exception as e:
-        return {"valid": True, "reason": f"Validation skipped: {e}"}
+        return {"valid": True, "reason": "Validation skipped: " + str(e)}
 
 # ---------------------------
 # Web search
 # ---------------------------
 
-def web_search(query: str, max_results: int = 10) -> str:
+def web_search(query, max_results=10):
     try:
         with DDGS() as ddgs:
-            results = list(ddgs.text(
-                query, max_results=max_results, region='wt-wt'
-            ))
+            results = list(ddgs.text(query, max_results=max_results, region='wt-wt'))
         if not results:
-            return f"NO_RESULTS: No web results for: {query}"
+            return "NO_RESULTS: No web results for: " + query
         out = ""
         for i, r in enumerate(results, 1):
-            out += f"[Result {i}]\nTitle: {r.get('title','')}\n"
-            out += f"URL: {r.get('href','')}\n"
-            out += f"Content: {r.get('body','')}\n\n"
+            out += "[Result " + str(i) + "]\n"
+            out += "Title: " + r.get('title','') + "\n"
+            out += "URL: " + r.get('href','') + "\n"
+            out += "Content: " + r.get('body','') + "\n\n"
         return out
     except Exception as e:
-        return f"SEARCH_ERROR: {e}"
+        return "SEARCH_ERROR: " + str(e)
+
+# ---------------------------
+# Geographic scope extractor
+# ---------------------------
+
+def extract_geographic_scope(query):
+    place_pattern = re.findall(r'\bin\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)', query)
+    time_words = {
+        "december","january","february","march","april","may","june",
+        "july","august","september","october","november","winter",
+        "summer","monsoon","spring","autumn","fall"
+    }
+    places = [p for p in place_pattern if p.lower() not in time_words]
+    if places:
+        return places[0]
+    if " in " in query.lower():
+        return query.split(" in ")[0].strip()
+    return query
 
 # ---------------------------
 # Intent classification
@@ -106,13 +172,13 @@ LIFESTYLE_INTENTS = [
     "best restaurants", "travel to", "visit in"
 ]
 
-def detect_pipeline_type(query: str) -> str:
+def detect_pipeline_type(query):
     q = query.lower()
     if any(w in q for w in LIFESTYLE_INTENTS):
         return "lifestyle"
     return "research"
 
-def detect_lifestyle_intent(query: str) -> str:
+def detect_lifestyle_intent(query):
     q = query.lower()
     if any(w in q for w in ["recipe","how to make","cook","ingredients"]):
         return "recipe"
@@ -126,21 +192,21 @@ def detect_lifestyle_intent(query: str) -> str:
         return "shopping"
     return "general"
 
-def classify_research_intent(query: str) -> dict:
-    prompt = f"""Analyse this research query and return JSON.
-
-Query: "{query}"
-
-Return ONLY valid JSON:
-{{
-  "intent": "competitive_analysis" | "market_research" | "job_research" | "comparison" | "general_research",
-  "execution_mode": "sequential",
-  "needs_data_analyst": true | false,
-  "search_queries": ["{query} detailed analysis 2025", "{query} latest developments"],
-  "output_format": "competitive_report" | "comparison_table" | "market_report" | "research_report",
-  "plain_english_summary": "one sentence: what I understood"
-}}"""
-
+def classify_research_intent(query):
+    prompt = (
+        'Analyse this research query and return JSON.\n\n'
+        'Query: "' + query + '"\n\n'
+        'Return ONLY valid JSON:\n'
+        '{\n'
+        '  "intent": "competitive_analysis" | "market_research" | "job_research" | "comparison" | "general_research",\n'
+        '  "execution_mode": "sequential",\n'
+        '  "needs_data_analyst": true | false,\n'
+        '  "search_queries": ["specific query with entity names 2025", "second specific query"],\n'
+        '  "output_format": "competitive_report" | "comparison_table" | "market_report" | "research_report",\n'
+        '  "plain_english_summary": "one sentence what I understood",\n'
+        '  "key_entities": ["company1", "product1"]\n'
+        '}'
+    )
     response = llm.invoke(prompt)
     text = response.content.strip()
     try:
@@ -152,198 +218,256 @@ Return ONLY valid JSON:
             "intent": "general_research",
             "execution_mode": "sequential",
             "needs_data_analyst": False,
-            "search_queries": [query],
+            "search_queries": [query, query + " 2025 analysis"],
             "output_format": "research_report",
-            "plain_english_summary": f"Research about: {query}"
+            "plain_english_summary": "Research about: " + query,
+            "key_entities": []
         }
 
-def decide_next_research_agent(state: OrchestratorState) -> dict:
-    completed   = state.get("completed_agents", [])
-    needs_data  = st.session_state.get("plan", {}).get("needs_data_analyst", False)
-    gaps        = state.get("gaps", [])
-    fb_used     = state.get("feedback_loop_used", False)
+def decide_next_research_agent(state):
+    completed    = state.get("completed_agents", [])
+    needs_data   = st.session_state.get("plan", {}).get("needs_data_analyst", False)
+    gaps         = state.get("gaps", [])
+    fb_used      = state.get("feedback_loop_used", False)
     cache_status = state.get("cache_status", "miss")
 
-    # If cache hit — skip web researcher entirely
     if cache_status == "hit" and "web_researcher" not in completed:
-        completed_copy = list(completed) + ["web_researcher"]
-        state["completed_agents"] = completed_copy
+        state["completed_agents"] = list(completed) + ["web_researcher"]
         st.session_state.state = state
+
+    completed = state.get("completed_agents", [])
 
     if gaps and not fb_used and "web_researcher" in completed and "writer" in completed:
         return {"next_agent": "gap_researcher",
-                "reason": f"Critic found gaps: {', '.join(gaps[:2])}."}
+                "reason": "Critic found gaps: " + ", ".join(gaps[:2])}
     if "web_researcher" not in completed:
-        return {"next_agent": "web_researcher",
-                "reason": "Starting with live web search."}
+        return {"next_agent": "web_researcher", "reason": "Starting with live web search."}
     if needs_data and "data_analyst" not in completed:
-        return {"next_agent": "data_analyst",
-                "reason": "Extracting numbers and structured data."}
+        return {"next_agent": "data_analyst", "reason": "Extracting numbers and structured data."}
     if "writer" not in completed:
-        return {"next_agent": "writer",
-                "reason": "Synthesising final report."}
+        return {"next_agent": "writer", "reason": "Synthesising final report."}
     if "critic" not in completed:
-        return {"next_agent": "critic",
-                "reason": "Reviewing for gaps and quality."}
+        return {"next_agent": "critic", "reason": "Reviewing for gaps and quality."}
     return {"next_agent": "DONE", "reason": "Pipeline complete."}
 
 # ---------------------------
-# Lifestyle prompt templates
+# Lifestyle prompts — geographic constraint enforced
 # ---------------------------
 
-def get_lifestyle_research_prompt(query: str, intent: str, results: str) -> str:
-    if intent == "recipe":
-        return f"""Extract recipe information from search results.
-Query: {query}
-Results: {results}
+def get_lifestyle_research_prompt(query, intent, results):
+    if intent == "places":
+        geo = extract_geographic_scope(query)
+        core = (
+            "You are a travel research agent with strict geographic accuracy rules.\n\n"
+            "CRITICAL RULES:\n"
+            "1. The query asks about: " + geo + "\n"
+            "2. ONLY list places that are INSIDE " + geo + "\n"
+            "3. ONLY list places explicitly mentioned in the search results\n"
+            "4. Do NOT add places from training data or general knowledge\n"
+            "5. If a result mentions a place OUTSIDE " + geo + " — IGNORE it\n\n"
+            "Query: " + query + "\n"
+            "Geographic scope: " + geo + " ONLY\n\n"
+            "Search Results:\n" + results + "\n\n"
+            "## Overview of " + geo + "\n"
+            "2-3 sentences based on results.\n\n"
+            "## Places to Visit in " + geo + "\n"
+            "ONLY places found in results AND within " + geo + ":\n"
+            "**[Place Name]** — [Result X]\n"
+            "- What it is\n"
+            "- Why visit\n"
+            "- Best time if mentioned\n\n"
+            "## Places Excluded\n"
+            "Any places outside " + geo + " — list and explain why excluded.\n\n"
+            "## Best Time to Visit " + geo + "\n"
+            "Only if in results.\n\n"
+            "## Travel Tips\n"
+            "Only from results.\n\n"
+            "## Sources\n"
+            "All URLs."
+        )
+        return build_prompt("web_researcher", query, core)
 
-## Overview
-## Ingredients (with quantities)
-## Method — Step by Step
-## Tips and Variations
-## Serving Suggestions
+    elif intent == "recipe":
+        core = (
+            "Extract ONLY recipe information from search results. "
+            "Do not add generic advice not in results.\n\n"
+            "Query: " + query + "\n"
+            "Search Results:\n" + results + "\n\n"
+            "## Overview\n"
+            "## Ingredients (with quantities from results)\n"
+            "## Method — Step by Step\n"
+            "## Tips (only from results)\n"
+            "## Sources"
+        )
+        return build_prompt("web_researcher", query, core)
 
-Base on search results only."""
-    elif intent == "places":
-        return f"""Extract place recommendations from search results.
-Query: {query}
-Results: {results}
-
-## Overview
-## Top Places to Visit
-For each: name · what it is · why visit · best time · must see
-
-## Best Time to Visit Overall
-## Quick Travel Tips"""
     elif intent == "food":
-        return f"""Extract food recommendations from search results.
-Query: {query}
-Results: {results}
+        core = (
+            "Extract food recommendations from search results only.\n\n"
+            "Query: " + query + "\n"
+            "Results:\n" + results + "\n\n"
+            "## Overview\n"
+            "## Must-Try Items (from results only)\n"
+            "## Tips\n"
+            "## Sources"
+        )
+        return build_prompt("web_researcher", query, core)
 
-## Overview
-## Must-Try Items (by category)
-## Healthy Options
-## Tips"""
     elif intent == "howto":
-        return f"""Extract step-by-step guidance from search results.
-Query: {query}
-Results: {results}
+        core = (
+            "Extract step-by-step guidance from search results only.\n\n"
+            "Query: " + query + "\n"
+            "Results:\n" + results + "\n\n"
+            "## Prerequisites\n"
+            "## Steps (numbered, from results only)\n"
+            "## Tips\n"
+            "## Common Mistakes\n"
+            "## Sources"
+        )
+        return build_prompt("web_researcher", query, core)
 
-## What You Need
-## Step-by-Step Guide
-## Tips for Success
-## Common Mistakes"""
     else:
-        return f"""Answer this query using search results.
-Query: {query}
-Results: {results}
+        core = (
+            "Answer using ONLY search results.\n\n"
+            "Query: " + query + "\n"
+            "Results:\n" + results + "\n\n"
+            "## Key Findings\n"
+            "## Details\n"
+            "## Recommendations\n"
+            "## Sources"
+        )
+        return build_prompt("web_researcher", query, core)
 
-## Key Findings
-## Details
-## Recommendations
-## Sources"""
 
-def get_lifestyle_summary_prompt(query: str, intent: str, research: str) -> str:
-    if intent == "recipe":
-        return f"""Summarise into a clean recipe card.
-Research: {research}
+def get_lifestyle_summary_prompt(query, intent, research):
+    if intent == "places":
+        geo = extract_geographic_scope(query)
+        core = (
+            "Create a clean travel reference card. "
+            "All places must be in: " + geo + "\n\n"
+            "Research:\n" + research + "\n\n"
+            "## " + geo + " — Quick Overview\n"
+            "2 sentences.\n\n"
+            "## Top Places in " + geo + "\n"
+            "Numbered list. Each: name + one-line reason.\n"
+            "ONLY places confirmed in " + geo + ".\n\n"
+            "## Best Time to Visit\n\n"
+            "## 3 Quick Tips for " + geo
+        )
+        return build_prompt("writer", query, core)
 
-## The Recipe at a Glance
-## Ingredients (quick list with quantities)
-## Method (numbered steps — concise but complete)
-## The One Tip That Makes It"""
-    elif intent == "places":
-        return f"""Summarise into a quick travel reference.
-Research: {research}
+    elif intent == "recipe":
+        core = (
+            "Create a clean recipe card.\n\n"
+            "Research:\n" + research + "\n\n"
+            "## The Dish\n"
+            "## Ingredients\n"
+            "## Method (numbered steps)\n"
+            "## Key Tip"
+        )
+        return build_prompt("writer", query, core)
 
-## Top 5 Highlights
-## Best Time to Visit
-## Don't Miss
-## Quick Tips (3)"""
     else:
-        return f"""Summarise concisely.
-Research: {research}
-
-## Key Takeaways (3 bullets)
-## Most Important Point
-## What to Do Next"""
+        core = (
+            "Summarise concisely.\n\n"
+            "Research:\n" + research + "\n\n"
+            "## Key Takeaways (3 bullets)\n"
+            "## Most Important Point\n"
+            "## What to Do Next"
+        )
+        return build_prompt("writer", query, core)
 
 # ---------------------------
 # Research agents
 # ---------------------------
 
-def run_web_researcher(state: OrchestratorState, placeholder,
-                       custom_queries: List[str] = None) -> str:
-    query        = state["query"]
-    fmt          = st.session_state.get("plan",{}).get("output_format","research_report")
-    queries      = custom_queries or st.session_state.get(
-        "plan",{}).get("search_queries",[query])
+def run_web_researcher(state, placeholder, custom_queries=None):
+    query         = state["query"]
+    fmt           = st.session_state.get("plan",{}).get("output_format","research_report")
+    key_entities  = st.session_state.get("plan",{}).get("key_entities",[])
+    queries       = custom_queries or st.session_state.get("plan",{}).get("search_queries",[query])
     cache_context = state.get("cache_context","")
 
     all_results = ""
     for i, q in enumerate(queries, 1):
-        placeholder.info(f"Searching ({i}/{len(queries)}): {q}")
-        all_results += f"\n=== SEARCH: {q} ===\n{web_search(q, max_results=8)}"
+        placeholder.info("Searching (" + str(i) + "/" + str(len(queries)) + "): " + q)
+        all_results += "\n=== SEARCH: " + q + " ===\n" + web_search(q, max_results=8)
 
     if "NO_RESULTS" in all_results and all_results.count("[Result") < 2:
-        msg = "⚠️ Insufficient web data found. Report may be incomplete."
+        msg = "Insufficient web data found. Report may be incomplete."
         placeholder.warning(msg)
         return msg
 
-    placeholder.info(f"Found {all_results.count('[Result')} results. Synthesising...")
+    placeholder.info("Found " + str(all_results.count("[Result")) + " results. Synthesising...")
 
-    # Include cache context if available (Zone 2 hybrid)
     cache_section = ""
     if cache_context:
-        cache_section = f"""
-PREVIOUSLY RESEARCHED CONTEXT (from cache — use as background):
-{cache_context[:2000]}
+        cache_section = (
+            "\nPREVIOUSLY RESEARCHED CONTEXT (background only):\n"
+            + cache_context[:1500]
+            + "\n---\n"
+        )
 
-Prioritise fresh results for recent developments.
-Use cached context for background and established facts.
-Flag contradictions between old and new findings.
-"""
+    entities_str = ", ".join(key_entities) if key_entities else query
 
     if fmt == "competitive_report":
-        fmt_instructions = """
-## Market Overview (numbers if found)
-## Key Players (ALL mentioned)
-For each: name · features · pricing (exact or "not found") · position · source
-## Market Share (only if found — otherwise state missing)
-## Recent Developments
-## Sources"""
+        relevance = (
+            "RELEVANCE FILTER:\n"
+            "Query: " + query + "\n"
+            "Focus on: " + entities_str + "\n\n"
+            "## Market Overview\n"
+            "Specific numbers only. If not found: 'Market size data not found in sources.'\n\n"
+            "## Key Players Found in Search Results\n"
+            "ONLY companies explicitly mentioned. For each:\n"
+            "**[Name]** — [Result X]\n"
+            "- What it does\n"
+            "- Key differentiator\n"
+            "- Pricing (exact or 'not found in sources')\n"
+            "- Source URL\n\n"
+            "Do NOT invent companies.\n\n"
+            "## Market Share\n"
+            "Only if explicitly in results. Otherwise: 'No market share data found.'\n\n"
+            "## Recent Developments\n\n"
+            "## What Was NOT Found\n\n"
+            "## Sources"
+        )
     elif fmt == "comparison_table":
-        fmt_instructions = """
-## Comparison Table (8+ dimensions, "not found" for missing)
-## Option A Strengths (with evidence)
-## Option B Strengths (with evidence)
-## Data Gaps
-## Sources"""
+        parts = [e.strip() for e in entities_str.split(',')]
+        opt_a = parts[0] if len(parts) > 0 else "Option A"
+        opt_b = parts[1] if len(parts) > 1 else "Option B"
+        relevance = (
+            "RELEVANCE FILTER:\n"
+            "Focus exclusively on: " + entities_str + "\n\n"
+            "## Comparison Overview\n\n"
+            "## Head-to-Head Data\n"
+            "| Dimension | " + opt_a + " | " + opt_b + " |\n"
+            "|---|---|---|\n"
+            "Only include dimensions with actual data. Mark missing as 'not found in sources'.\n\n"
+            "## What Was NOT Found\n\n"
+            "## Sources"
+        )
     else:
-        fmt_instructions = """
-## Key Findings
-## Players and Tools Mentioned
-## Numbers Found
-## Recent Developments
-## What Was Not Found
-## Sources"""
+        relevance = (
+            "Focus on answering: " + query + "\n\n"
+            "## Key Findings (cited by source)\n"
+            "## Specific Data Found\n"
+            "## What Was NOT Found\n"
+            "## Sources"
+        )
 
-    prompt = f"""You are a web research agent.
-
-RULES:
-- Use ONLY the search results and cached context below
-- Write "not found in sources" for missing data
-- Reference results by number e.g. [Result 3]
-- Name every company and tool found
-
-Query: {query}
-{cache_section}
-FRESH SEARCH RESULTS:
-{all_results}
-
-{fmt_instructions}
-
-Minimum 400 words."""
+    core = (
+        "GOLDEN RULES:\n"
+        "1. Cite [Result N] for every fact\n"
+        "2. Write 'not found in sources' for missing data\n"
+        "3. Skip off-topic results entirely\n"
+        "4. Name every specific company and tool found\n\n"
+        "Query: " + query + "\n"
+        + cache_section +
+        "SEARCH RESULTS:\n" + all_results + "\n\n"
+        + relevance + "\n\n"
+        "Minimum 400 words."
+    )
+    prompt = build_prompt("web_researcher", query, core)
 
     output = ""
     for chunk in llm.stream(prompt):
@@ -351,29 +475,32 @@ Minimum 400 words."""
         placeholder.markdown(output)
     return output
 
-def run_gap_researcher(state: OrchestratorState, placeholder) -> str:
+
+def run_gap_researcher(state, placeholder):
     gaps = state.get("gaps", [])
-    gap_queries = [f"{state['query']} {g}" for g in gaps[:2]]
-    placeholder.info(f"Filling {len(gap_queries)} gaps...")
+    gap_queries = [state['query'] + " " + g for g in gaps[:2]]
+    placeholder.info("Filling " + str(len(gap_queries)) + " gaps...")
     return run_web_researcher(state, placeholder, custom_queries=gap_queries)
 
-def run_data_analyst(state: OrchestratorState, placeholder) -> str:
+
+def run_data_analyst(state, placeholder):
     query    = state["query"]
     research = state.get("agent_outputs",{}).get("web_researcher","No research.")
 
-    prompt = f"""Data analyst. Extract ALL quantitative data.
-Query: {query}
-Research: {research}
-
-## Numbers Table
-| Metric | Value | Source |
-If none: "No quantitative data found."
-
-## Market Sizing
-## Growth Trends
-## Competitive Numbers
-## Data Quality (High/Medium/Low)
-## What's Missing"""
+    core = (
+        "Extract ALL quantitative data from research.\n"
+        "Only include numbers explicitly stated.\n\n"
+        "Query: " + query + "\n"
+        "Research:\n" + research + "\n\n"
+        "## Numbers Table\n"
+        "| Metric | Value | Source | Confidence |\n"
+        "If none: 'No quantitative data found.'\n\n"
+        "## Market Sizing\n"
+        "## Growth Trends\n"
+        "## Competitive Numbers\n"
+        "## Critical Missing Data"
+    )
+    prompt = build_prompt("data_analyst", query, core)
 
     output = ""
     for chunk in llm.stream(prompt):
@@ -381,78 +508,134 @@ If none: "No quantitative data found."
         placeholder.markdown(output)
     return output
 
-def run_writer(state: OrchestratorState, placeholder) -> str:
+
+def run_writer(state, placeholder):
     query   = state["query"]
     outputs = state.get("agent_outputs", {})
     fmt     = st.session_state.get("plan",{}).get("output_format","research_report")
 
     all_research = "\n\n".join(
-        f"=== {k.upper()} ===\n{v}" for k, v in outputs.items()
+        "=== " + k.upper() + " ===\n" + v for k, v in outputs.items()
     )
 
     if fmt == "competitive_report":
-        structure = """
-## Executive Summary (name top players, state if data unavailable)
-## Competitive Map
-| Player | Category | Strength | Weakness | Price |
-Include ALL. Use "not found" for missing.
-## Top Players Deep Dive
-## Market Share (only if found)
-## Whitespace and Opportunities
-## Risks
-## PM Recommendations (5 specific, evidence-based)
-## Sources"""
+        structure = (
+            "## Executive Summary\n"
+            "3 sentences. Name top 3 players. One specific number with source.\n\n"
+            "## Competitive Map\n"
+            "| Player | Segment | Key Strength | Key Weakness | Pricing |\n"
+            "ALL players from research. Cite every row.\n\n"
+            "## Top Players Deep Dive\n"
+            "For each top 3-4 players:\n"
+            "**[Name]** — positioning\n"
+            "- Differentiator [Source: URL]\n"
+            "- Target customer\n"
+            "- Pricing (exact or 'not found')\n"
+            "- Recent news [Source: URL]\n\n"
+            "## Market Share\n"
+            "ONLY if found with citation. Otherwise: 'Not found in sources.'\n\n"
+            "## Whitespace and Opportunities\n"
+            "3 gaps grounded in research.\n\n"
+            "## PM Recommendations\n"
+            "Exactly 5. Each must follow:\n"
+            "**[Recommendation]**\n"
+            "Evidence: [finding + source]\n"
+            "Action: [specific action this week]\n"
+            "Risk if ignored: [consequence]\n\n"
+            "## Sources"
+        )
     elif fmt == "comparison_table":
-        structure = """
-## Verdict (only declare winner if evidence supports it)
-## Comparison Table (10+ dimensions)
-## When to Choose Option A (3 scenarios)
-## When to Choose Option B (3 scenarios)
-## Data Gaps
-## PM Decision Framework"""
+        structure = (
+            "## Verdict\n"
+            "Only declare winner if evidence supports it.\n\n"
+            "## Comparison Table\n"
+            "10+ dimensions. Cite sources. 'not found' for missing.\n\n"
+            "## When to Choose Option A (3 scenarios)\n"
+            "## When to Choose Option B (3 scenarios)\n"
+            "## Data Gaps\n"
+            "## PM Decision Framework"
+        )
     else:
-        structure = """
-## Executive Summary
-## Key Findings (evidence-based)
-## Analysis
-## Data and Evidence
-## What Was Not Found
-## Recommendations
-## Sources"""
+        structure = (
+            "## Executive Summary\n"
+            "## Key Findings (each with source)\n"
+            "## Analysis\n"
+            "## Data and Evidence\n"
+            "## What Was Not Found\n"
+            "## Recommendations\n"
+            "## Sources"
+        )
 
-    prompt = f"""Senior analyst writing final report.
-Query: {query}
-Research: {all_research}
+    draft_core = (
+        "CITATION RULE: Every claim must include its source inline.\n"
+        "Format: 'X has Y users [Source: URL]'\n"
+        "NO GENERIC STATEMENTS — every sentence must be specific.\n\n"
+        "Query: " + query + "\n\n"
+        "Research:\n" + all_research + "\n\n"
+        + structure + "\n\n"
+        "Minimum 600 words. Cite every claim."
+    )
+    draft_prompt = build_prompt("writer", query, draft_core)
 
-{structure}
+    placeholder.info("Writer drafting report...")
+    draft = ""
+    for chunk in llm.stream(draft_prompt):
+        draft += chunk.content
+        placeholder.markdown(draft)
 
-Rules: Name every company. Include all numbers.
-"not found in sources" for missing data.
-No winners without evidence. 500+ words."""
+    # Self-correction step
+    placeholder.info("Writer self-reviewing...")
+    check_core = (
+        "Review your own report against this checklist:\n"
+        "1. Does every factual claim have a source citation? Fix uncited claims.\n"
+        "2. Are PM recommendations specific with evidence + action + risk?\n"
+        "3. Does the executive summary name companies and include a number?\n"
+        "4. Is market share cited or explicitly stated as unavailable?\n"
+        "5. Are there invented facts not in the research? Remove them.\n\n"
+        "Your draft:\n" + draft + "\n\n"
+        "Return improved report only. No preamble."
+    )
+    check_prompt = build_prompt("writer", query, check_core)
 
-    output = ""
-    for chunk in llm.stream(prompt):
-        output += chunk.content
-        placeholder.markdown(output)
-    return output
+    improved = ""
+    for chunk in llm.stream(check_prompt):
+        improved += chunk.content
+        placeholder.markdown(improved)
 
-def run_critic(state: OrchestratorState, placeholder) -> str:
+    return improved
+
+
+def run_critic(state, placeholder):
     query   = state["query"]
     report  = state.get("agent_outputs",{}).get("writer","No report.")
     fb_used = state.get("feedback_loop_used", False)
 
-    prompt = f"""Senior editor reviewing this report.
-Query: {query}
-Report: {report}
+    gap_instruction = (
+        "2 specific search queries to fill the most critical gaps."
+        if not fb_used else
+        "Feedback loop already used."
+    )
 
-## What Works Well (3 strengths)
-## Critical Gaps (as searchable queries)
-## Hallucination Check
-## Improved Executive Summary
-## Gap Search Queries
-{'2 specific queries to fill gaps.' if not fb_used else 'Feedback loop used.'}
-## Final Verdict
-Score X/10. Ready to share? What one change would help most?"""
+    core = (
+        "Review this competitive intelligence report.\n\n"
+        "Original query: " + query + "\n\n"
+        "Report:\n" + report + "\n\n"
+        "## Query Alignment Check\n"
+        "Does every piece of content directly answer: '" + query + "'?\n"
+        "Flag any content outside the geographic or topical scope.\n\n"
+        "## What Works Well\n"
+        "3 specific strengths.\n\n"
+        "## Critical Gaps\n"
+        "3 weaknesses. Each as a searchable query.\n\n"
+        "## Hallucination Check\n"
+        "Flag claims without citations or that appear invented.\n\n"
+        "## Improved Executive Summary\n\n"
+        "## Gap Search Queries\n"
+        + gap_instruction + "\n\n"
+        "## Final Verdict\n"
+        "Score X/10. What single change would most improve this report?"
+    )
+    prompt = build_prompt("critic", query, core)
 
     output = ""
     for chunk in llm.stream(prompt):
@@ -507,113 +690,134 @@ AGENT_TYPE = {
 # Streamlit UI
 # ---------------------------
 
-st.set_page_config(page_title="AI Research Agent", layout="wide")
-st.title("AI Research Agent")
-st.caption("One system · Any query · Chroma persistence · Metrics logged · Day 24")
+st.set_page_config(
+    page_title="PM Intel — Competitive Intelligence",
+    page_icon="🔍",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
+st.markdown("""
+<style>
+.product-badge {
+    display: inline-block;
+    background: rgba(37,99,235,0.15);
+    color: #60a5fa;
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 500;
+    margin-bottom: 8px;
+}
+.hero-title { font-size: 2rem; font-weight: 700; margin: 0; padding: 0; }
+.hero-sub { color: rgba(255,255,255,0.6); font-size: 0.95rem; margin-top: 4px; }
+.query-hint { font-size: 0.8rem; color: rgba(255,255,255,0.4); margin-top: 6px; }
+</style>
+""", unsafe_allow_html=True)
+
+# ---------------------------
+# Sidebar
+# ---------------------------
 with st.sidebar:
-    st.header("Pipeline State")
+    st.markdown("### PM Intel")
+    st.caption("Competitive intelligence for product managers")
+    st.divider()
+
     state = st.session_state.get("state", {})
     if state:
         plan = st.session_state.get("plan", {})
-        st.markdown("**Query**")
-        st.code(state.get("query","—")[:50])
-        st.markdown("**Pipeline**")
+        st.markdown("**Current query**")
+        st.code(state.get("query","—")[:45], language=None)
         pt = state.get("pipeline_type","—")
-        st.info(f"{'🎯 Lifestyle' if pt=='lifestyle' else '🔬 Research'}")
+        st.markdown("**Pipeline**")
+        st.info("🎯 Lifestyle" if pt=="lifestyle" else "🔬 Research")
         if pt == "research":
             st.markdown("**Intent**")
-            st.code(plan.get("intent","—"))
+            st.code(plan.get("intent","—").replace("_"," "), language=None)
             st.markdown("**Format**")
-            st.code(plan.get("output_format","—"))
-
-        # Cache status
+            st.code(plan.get("output_format","—").replace("_"," "), language=None)
         cs = state.get("cache_status","")
         if cs:
             st.markdown("**Cache**")
             if cs == "hit":
-                st.success("✓ Cache hit — web search skipped")
+                st.success("✓ Cache hit")
             elif cs == "context":
-                st.info("~ Context retrieved — hybrid search")
+                st.info("~ Hybrid")
             else:
-                st.warning("○ Cache miss — fresh search")
-
-        st.markdown("**Entity valid**")
-        if state.get("entity_valid", True):
-            st.success("Validated")
-        else:
-            st.error("Unverified")
-
+                st.warning("○ Fresh search")
+        if not state.get("entity_valid", True):
+            st.error("⚠️ Entity unverified")
         if state.get("critic_score",-1) > 0:
-            st.markdown("**Critic score**")
             score = state.get("critic_score")
-            fn = st.success if score >= 7 else (st.warning if score >= 5 else st.error)
-            fn(f"{score}/10")
-
-        st.markdown("**Completed agents**")
-        for a in state.get("completed_agents",[]):
-            t = AGENT_TYPE.get(a,"read")
-            (st.success if t=="write" else st.info)(
-                f"{AGENT_ICONS.get(a,'')} {AGENT_LABELS.get(a,a)}"
-            )
+            st.markdown("**Critic score**")
+            if score >= 7:
+                st.success(str(score) + "/10")
+            elif score >= 5:
+                st.warning(str(score) + "/10")
+            else:
+                st.error(str(score) + "/10")
+        completed = state.get("completed_agents",[])
+        if completed:
+            st.markdown("**Agents**")
+            for a in completed:
+                t = AGENT_TYPE.get(a,"read")
+                fn = st.success if t=="write" else st.info
+                fn(AGENT_ICONS.get(a,"") + " " + AGENT_LABELS.get(a,a))
     else:
-        st.info("Run a query to see state")
+        st.info("Run a query to see pipeline state")
 
     st.divider()
-
     perf = st.session_state.get("performance", {})
     if perf:
-        st.header("Performance")
+        st.markdown("**Performance**")
         for agent, m in perf.items():
             st.markdown(
-                f"**{AGENT_ICONS.get(agent,'')} {AGENT_LABELS.get(agent,agent)}**  "
-                f"`{m.get('latency',0):.1f}s` · `{m.get('tokens',0)} tok`"
+                AGENT_ICONS.get(agent,"") + " **" + AGENT_LABELS.get(agent,agent) + "**  "
+                + "`" + str(round(m.get('latency',0),1)) + "s`"
+                + " · `" + str(m.get('tokens',0)) + " tok`"
             )
         tl = sum(m.get("latency",0) for m in perf.values())
         tt = sum(m.get("tokens",0) for m in perf.values())
         st.divider()
         col1, col2 = st.columns(2)
-        col1.metric("Total", f"{tl:.1f}s")
+        col1.metric("Total", str(round(tl,1)) + "s")
         col2.metric("Tokens", str(tt))
 
     st.divider()
 
-    # Chroma stats
-    st.header("Research Library")
+    # Agent comms stats
+    st.markdown("**Agent Communications**")
     try:
-        cs = get_chroma_stats()
-        st.metric("Stored runs", cs.get("total_stored", 0))
-        if cs.get("avg_quality_score"):
-            st.metric("Avg quality", f"{cs['avg_quality_score']}/10")
-        if cs.get("intents_breakdown"):
-            st.caption("Topics stored:")
-            for intent, count in cs["intents_breakdown"].items():
-                st.caption(f"  {intent}: {count}")
-    except Exception as e:
-        st.caption(f"Library unavailable: {e}")
-
-    st.divider()
-
-    # Cumulative stats
-    st.header("Cumulative Stats")
-    try:
-        stats = get_summary_stats()
-        if stats.get("total_runs", 0) > 0:
-            st.metric("Total runs", stats["total_runs"])
-            if stats.get("avg_critic_score"):
-                st.metric("Avg score", f"{stats['avg_critic_score']}/10")
-            if stats.get("avg_latency"):
-                st.metric("Avg latency", f"{stats['avg_latency']}s")
-            if stats.get("approval_rate"):
-                st.metric("Approval rate", f"{stats['approval_rate']}%")
+        comms = get_comms_stats()
+        if comms.get("total_handoffs", 0) > 0:
+            st.metric("Total handoffs", comms["total_handoffs"])
+            st.metric("Avg input tokens", comms.get("avg_input_tokens","—"))
+            if comms.get("handoff_breakdown"):
+                for k, v in comms["handoff_breakdown"].items():
+                    st.caption(k + ": " + str(v))
         else:
-            st.info("No runs yet")
-    except Exception as e:
-        st.caption(f"Stats unavailable: {e}")
+            st.caption("No handoffs logged yet")
+    except Exception:
+        st.caption("No handoffs yet")
 
     st.divider()
-    st.success("LangSmith on")
-    st.markdown("[Traces →](https://smith.langchain.com)")
+    try:
+        cs_stats  = get_chroma_stats()
+        run_stats = get_summary_stats()
+        st.markdown("**Research Library**")
+        st.metric("Stored runs", cs_stats.get("total_stored",0))
+        if run_stats.get("total_runs",0) > 0:
+            st.metric("Total runs", run_stats["total_runs"])
+            if run_stats.get("avg_critic_score"):
+                st.metric("Avg score", str(run_stats['avg_critic_score']) + "/10")
+    except Exception:
+        pass
+
+    st.divider()
+    st.success("LangSmith tracing on")
+    st.markdown("[View traces →](https://smith.langchain.com)")
+    st.divider()
+    st.caption("PM Intel · Day 27")
 
 # Session init
 for key, default in [
@@ -626,47 +830,89 @@ for key, default in [
 
 # ── STAGE 1: Input ───────────────────────────────────────────
 if st.session_state.stage == "input":
-    st.subheader("Ask anything")
-    st.caption("Recipes · Travel · Research · Competitive analysis · Comparisons")
 
-    examples = [
-        "Analyse the competitive landscape for AI coding assistants in 2025",
-        "What is the best recipe for butter chicken",
-        "Compare LangGraph vs CrewAI for production agents",
-        "Best places to visit in Rajasthan in December",
-    ]
-    cols = st.columns(2)
-    for i, ex in enumerate(examples):
-        if cols[i%2].button(ex, use_container_width=True):
-            st.session_state.prefill = ex
-            st.rerun()
+    st.markdown("""
+<div style="padding:1rem 0 0.5rem 0;border-bottom:1px solid rgba(255,255,255,0.1);margin-bottom:1.5rem;">
+    <div class="product-badge">AI-Powered Research</div>
+    <div class="hero-title">PM Intel</div>
+    <div class="hero-sub">Competitive intelligence for product managers · Research any market in minutes</div>
+</div>
+""", unsafe_allow_html=True)
 
+    col1, col2, col3, col4 = st.columns(4)
+    col1.info("🔍 **Search**\nLive web research")
+    col2.info("📊 **Analyse**\nExtract key data")
+    col3.info("✍️ **Synthesise**\nStructured report")
+    col4.info("🔬 **Review**\nCritic scores output")
+
+    st.divider()
+    st.markdown("#### What do you want to research?")
+
+    examples = {
+        "🏆 Competitive": [
+            "Competitive landscape for AI coding assistants in 2025",
+            "CRM tools for SMBs in India — competitive analysis",
+        ],
+        "⚖️ Compare": [
+            "Compare LangGraph vs CrewAI for production agents",
+            "Notion vs Linear for startup product teams",
+        ],
+        "📈 Market": [
+            "Indian fintech market key players 2025",
+            "No-code app builders market landscape 2025",
+        ],
+        "🌍 Lifestyle": [
+            "Best places to visit in Goa in December",
+            "Best butter chicken recipe",
+        ]
+    }
+
+    tabs = st.tabs(list(examples.keys()))
+    for tab, (category, queries) in zip(tabs, examples.items()):
+        with tab:
+            cols = st.columns(2)
+            for i, q in enumerate(queries):
+                if cols[i].button(q, use_container_width=True, key="ex_" + q[:20]):
+                    st.session_state.prefill = q
+                    st.rerun()
+
+    st.markdown("")
     prefill = st.session_state.get("prefill","")
-    query = st.text_input("Your query", value=prefill,
-                          placeholder="Ask anything...")
+    query = st.text_input(
+        "Or type your own query",
+        value=prefill,
+        placeholder="e.g. Competitive landscape for project management tools in India 2025",
+        label_visibility="collapsed"
+    )
+    st.markdown(
+        '<div class="query-hint">Works for competitive analysis, comparisons, market research, recipes, travel, and more</div>',
+        unsafe_allow_html=True
+    )
 
-    if st.button("Start", type="primary"):
+    col1, col2 = st.columns([1,4])
+    with col1:
+        start = st.button("Research →", type="primary", use_container_width=True)
+
+    if start:
         if not query.strip():
             st.warning("Please enter a query.")
         else:
             pipeline_type = detect_pipeline_type(query)
             entity_check  = validate_entity(query)
 
-            # Check Chroma cache
-            with st.spinner("Checking research library..."):
+            with st.spinner("Checking research library and classifying intent..."):
                 cache_result = check_cache(query)
-
-            if pipeline_type == "lifestyle":
-                lifestyle_intent = detect_lifestyle_intent(query)
-                plan = {
-                    "intent": lifestyle_intent,
-                    "pipeline_type": "lifestyle",
-                    "plain_english_summary": f"Finding {lifestyle_intent} info for: {query}"
-                }
-            else:
-                with st.spinner("Classifying intent..."):
+                if pipeline_type == "lifestyle":
+                    lifestyle_intent = detect_lifestyle_intent(query)
+                    plan = {
+                        "intent": lifestyle_intent,
+                        "pipeline_type": "lifestyle",
+                        "plain_english_summary": "Finding " + lifestyle_intent + " info for: " + query,
+                        "key_entities": []
+                    }
+                else:
                     plan = classify_research_intent(query)
-                plan["pipeline_type"] = "research"
+                    plan["pipeline_type"] = "research"
 
             st.session_state.plan = plan
             st.session_state.writer_approved = None
@@ -696,78 +942,73 @@ if st.session_state.stage == "input":
             st.session_state.stage = "confirm_intent"
             st.rerun()
 
-# ── STAGE 2: Confirm intent ──────────────────────────────────
+# ── STAGE 2: Confirm ─────────────────────────────────────────
 elif st.session_state.stage == "confirm_intent":
     state = st.session_state.state
     plan  = st.session_state.plan
     pt    = state.get("pipeline_type","research")
     cs    = state.get("cache_status","miss")
 
-    st.subheader("Confirm — is this what you meant?")
+    st.subheader("Confirm query interpretation")
 
     if not state.get("entity_valid"):
         st.warning("⚠️ Query subject could not be verified. Results may be unreliable.")
-
-    # Show cache status
     if cs == "hit":
-        st.success(
-            "✓ Found in research library — previous research will be used. "
-            "Web search skipped. Instant results."
-        )
+        st.success("✓ Found in research library — web search skipped.")
     elif cs == "context":
-        st.info(
-            "~ Related research found in library — will be used as context. "
-            "Fresh web search will also run to supplement."
-        )
+        st.info("~ Related research found — used as background context.")
 
     if pt == "lifestyle":
+        geo = extract_geographic_scope(state.get("query","")) if plan.get("intent")=="places" else ""
+        geo_note = ("\n\n**Geographic scope:** " + geo + " only") if geo else ""
         st.info(
-            f"**🔍 Web Researcher** will search then "
-            f"**✍️ Writer** will produce a direct answer.\n\n"
-            f"Intent: **{plan.get('intent','').replace('_',' ').title()}**"
+            "**Pipeline:** 🔍 Web Researcher → ✍️ Writer\n\n"
+            "**Intent:** " + plan.get("intent","").replace("_"," ").title()
+            + "\n\n**Understood:** " + plan.get("plain_english_summary","")
+            + geo_note
         )
     else:
-        if cs == "hit":
-            st.info(
-                "Pipeline: **Cache → ✍️ Writer → 🔬 Critic**\n\n"
-                "Web search skipped — using stored research."
-            )
-        else:
-            st.info(
-                "Pipeline: **🔍 Web Researcher → 📊 Data Analyst (if needed) "
-                "→ ✍️ Writer → 🔬 Critic**\n\n"
-                f"Intent: **{plan.get('intent','').replace('_',' ').title()}** · "
-                f"Format: **{plan.get('output_format','').replace('_',' ').title()}**"
-            )
-        st.caption(f"Understood: {plan.get('plain_english_summary','')}")
+        pipeline_desc = (
+            "Cache → ✍️ Writer → 🔬 Critic" if cs=="hit"
+            else "🔍 Web Researcher → 📊 Data Analyst (if needed) → ✍️ Writer → 🔬 Critic"
+        )
+        st.info(
+            "**Pipeline:** " + pipeline_desc + "\n\n"
+            "**Intent:** " + plan.get("intent","").replace("_"," ").title()
+            + " · **Format:** " + plan.get("output_format","").replace("_"," ").title()
+            + "\n\n**Understood:** " + plan.get("plain_english_summary","")
+        )
+        if plan.get("key_entities"):
+            st.caption("Key entities: " + ", ".join(plan["key_entities"]))
 
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("Yes — start", type="primary", use_container_width=True):
-            st.session_state.stage = (
-                "lifestyle_search" if pt == "lifestyle"
-                else "orchestrating"
-            )
+        if st.button("Yes — start research", type="primary", use_container_width=True):
+            st.session_state.stage = "lifestyle_search" if pt=="lifestyle" else "orchestrating"
             st.rerun()
     with col2:
-        if st.button("No — rephrase", use_container_width=True):
+        if st.button("No — rephrase query", use_container_width=True):
             st.session_state.stage = "input"
             st.session_state.state = {}
             st.session_state.plan  = {}
             st.rerun()
 
-# ── LIFESTYLE: Web search ────────────────────────────────────
+# ── LIFESTYLE: Search ─────────────────────────────────────────
 elif st.session_state.stage == "lifestyle_search":
     state  = st.session_state.state
     query  = state["query"]
     intent = state.get("intent","general")
 
-    st.subheader("🔍 Web Researcher is searching...")
+    if intent == "places":
+        geo = extract_geographic_scope(query)
+        st.subheader("🔍 Searching for places in " + geo + "...")
+    else:
+        st.subheader("🔍 Researching: " + query)
+
     placeholder = st.empty()
     start = time.time()
-
     search_results = web_search(query, max_results=8)
-    placeholder.info(f"Found {search_results.count('[Result')} results. Synthesising...")
+    placeholder.info("Found " + str(search_results.count("[Result")) + " results. Synthesising...")
 
     prompt   = get_lifestyle_research_prompt(query, intent, search_results)
     research = ""
@@ -785,18 +1026,20 @@ elif st.session_state.stage == "lifestyle_search":
     st.session_state.stage = "lifestyle_write"
     st.rerun()
 
-# ── LIFESTYLE: Write checkpoint ──────────────────────────────
+# ── LIFESTYLE: Write checkpoint ───────────────────────────────
 elif st.session_state.stage == "lifestyle_write":
     state    = st.session_state.state
     research = state["agent_outputs"].get("web_researcher","")
 
-    st.subheader("✍️ Writer — approve to generate final answer")
+    st.subheader("✍️ Review research before generating final answer")
+    st.caption("Write operation — requires your approval")
+
     with st.expander("Research gathered", expanded=True):
         st.markdown(research)
 
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("Approve", type="primary", use_container_width=True):
+        if st.button("Approve — generate answer", type="primary", use_container_width=True):
             st.session_state.writer_approved = True
             st.session_state.stage = "lifestyle_summarise"
             st.rerun()
@@ -809,14 +1052,14 @@ elif st.session_state.stage == "lifestyle_write":
             st.session_state.stage = "done"
             st.rerun()
 
-# ── LIFESTYLE: Summarise ─────────────────────────────────────
+# ── LIFESTYLE: Summarise ──────────────────────────────────────
 elif st.session_state.stage == "lifestyle_summarise":
     state    = st.session_state.state
     query    = state["query"]
     intent   = state.get("intent","general")
     research = state["agent_outputs"].get("web_researcher","")
 
-    st.subheader("✍️ Writer generating answer...")
+    st.subheader("✍️ Generating answer...")
     placeholder = st.empty()
     start   = time.time()
     prompt  = get_lifestyle_summary_prompt(query, intent, research)
@@ -836,12 +1079,12 @@ elif st.session_state.stage == "lifestyle_summarise":
     st.session_state.stage = "done"
     st.rerun()
 
-# ── RESEARCH: Orchestrator ───────────────────────────────────
+# ── RESEARCH: Orchestrator ────────────────────────────────────
 elif st.session_state.stage == "orchestrating":
     state     = st.session_state.state
     completed = state.get("completed_agents",[])
     n = len(completed)
-    st.progress(min(n/4,1.0), text=f"{n} agents complete")
+    st.progress(min(n/4,1.0), text=str(n) + " agents complete")
 
     decision   = decide_next_research_agent(state)
     next_agent = decision["next_agent"]
@@ -855,31 +1098,27 @@ elif st.session_state.stage == "orchestrating":
         state["iteration"]  = state.get("iteration",0)+1
         st.session_state.state = state
         agent_type = AGENT_TYPE.get(next_agent,"read")
-        st.session_state.stage = (
-            "write_checkpoint" if agent_type=="write"
-            else "running_agent"
-        )
+        st.session_state.stage = "write_checkpoint" if agent_type=="write" else "running_agent"
         st.info(
-            f"**Next:** {AGENT_ICONS.get(next_agent,'')} "
-            f"{AGENT_LABELS.get(next_agent)} ({agent_type})\n\n"
-            f"_{decision['reason']}_"
+            "**Next:** " + AGENT_ICONS.get(next_agent,"")
+            + " " + AGENT_LABELS.get(next_agent,"")
+            + " (" + agent_type + ")\n\n_" + decision["reason"] + "_"
         )
     st.rerun()
 
-# ── RESEARCH: Write checkpoint ───────────────────────────────
+# ── RESEARCH: Write checkpoint ────────────────────────────────
 elif st.session_state.stage == "write_checkpoint":
     state      = st.session_state.state
     next_agent = state["next_agent"]
     completed  = state.get("completed_agents",[])
 
-    st.subheader(f"Write Operation — {AGENT_ICONS.get(next_agent,'')} {AGENT_LABELS.get(next_agent)}")
-    st.warning(f"**{AGENT_LABELS.get(next_agent)}** produces content. Approve to proceed.")
-    st.caption(f"Completed: {', '.join([AGENT_LABELS.get(a,a) for a in completed]) or 'none'}")
+    st.subheader("Write Operation — " + AGENT_ICONS.get(next_agent,"") + " " + AGENT_LABELS.get(next_agent,""))
+    st.warning("**" + AGENT_LABELS.get(next_agent,"") + "** will produce content. Approve to proceed.")
+    st.caption("Completed: " + (", ".join([AGENT_LABELS.get(a,a) for a in completed]) or "none"))
 
     col1, col2 = st.columns(2)
     with col1:
-        if st.button(f"Run {AGENT_LABELS.get(next_agent)}",
-                     type="primary", use_container_width=True):
+        if st.button("Run " + AGENT_LABELS.get(next_agent,""), type="primary", use_container_width=True):
             st.session_state.stage = "running_agent"
             st.rerun()
     with col2:
@@ -890,7 +1129,7 @@ elif st.session_state.stage == "write_checkpoint":
             st.session_state.stage = "orchestrating"
             st.rerun()
 
-# ── RESEARCH: Run agent ──────────────────────────────────────
+# ── RESEARCH: Run agent ───────────────────────────────────────
 elif st.session_state.stage == "running_agent":
     state      = st.session_state.state
     next_agent = state["next_agent"]
@@ -898,8 +1137,10 @@ elif st.session_state.stage == "running_agent":
     agent_type = AGENT_TYPE.get(next_agent,"read")
     n = len(completed)
 
-    st.progress(min(n/4,1.0), text=f"{n}/4 complete")
-    st.subheader(f"{AGENT_ICONS.get(next_agent,'')} {AGENT_LABELS.get(next_agent)} is working...")
+    st.progress(min(n/4,1.0), text=str(n) + "/4 complete")
+    st.subheader(AGENT_ICONS.get(next_agent,"") + " " + AGENT_LABELS.get(next_agent,"") + " is working...")
+    if next_agent == "writer":
+        st.caption("Draft → self-review → improved report")
 
     placeholder = st.empty()
     start    = time.time()
@@ -913,9 +1154,7 @@ elif st.session_state.stage == "running_agent":
     if next_agent == "gap_researcher":
         state["feedback_loop_used"] = True
         existing = state["agent_outputs"].get("web_researcher","")
-        state["agent_outputs"]["web_researcher"] = (
-            existing + "\n\n=== GAP FILL ===\n" + output
-        )
+        state["agent_outputs"]["web_researcher"] = existing + "\n\n=== GAP FILL ===\n" + output
 
     if next_agent in ("writer","critic"):
         state["final_report"] = output
@@ -927,13 +1166,41 @@ elif st.session_state.stage == "running_agent":
     st.session_state.agent_log.append({
         "agent": next_agent, "output": output, "latency": latency
     })
-    st.session_state.stage = (
-        "review_output" if agent_type=="write"
-        else "orchestrating"
-    )
+
+    # Log agent communication
+    try:
+        input_text = ""
+        if next_agent == "data_analyst":
+            input_text = state.get("agent_outputs",{}).get("web_researcher","")
+        elif next_agent == "writer":
+            input_text = "\n".join(state.get("agent_outputs",{}).values())
+        elif next_agent == "critic":
+            input_text = state.get("agent_outputs",{}).get("writer","")
+        elif next_agent == "gap_researcher":
+            input_text = str(state.get("gaps",[]))
+
+        log_handoff(
+            run_id         = "run_" + str(int(time.time())),
+            from_agent     = next_agent,
+            to_agent       = "orchestrator",
+            query          = state.get("query",""),
+            input_text     = input_text,
+            output_text    = output,
+            state_snapshot = {
+                "completed_agents":   state.get("completed_agents",[]),
+                "cache_status":       state.get("cache_status",""),
+                "critic_score":       state.get("critic_score",-1),
+                "gaps":               state.get("gaps",[]),
+                "feedback_loop_used": state.get("feedback_loop_used",False),
+            }
+        )
+    except Exception:
+        pass
+
+    st.session_state.stage = "review_output" if agent_type=="write" else "orchestrating"
     st.rerun()
 
-# ── RESEARCH: Review output ──────────────────────────────────
+# ── RESEARCH: Review output ───────────────────────────────────
 elif st.session_state.stage == "review_output":
     state      = st.session_state.state
     last_agent = state["completed_agents"][-1]
@@ -942,33 +1209,37 @@ elif st.session_state.stage == "review_output":
     gaps       = state.get("gaps",[])
     score      = state.get("critic_score",-1)
 
-    st.subheader(f"Review — {AGENT_ICONS.get(last_agent,'')} {AGENT_LABELS.get(last_agent)} output")
+    st.subheader("Review — " + AGENT_ICONS.get(last_agent,"") + " " + AGENT_LABELS.get(last_agent,"") + " output")
 
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Latency", f"{perf.get('latency',0):.1f}s")
+    col1.metric("Latency", str(round(perf.get('latency',0),1)) + "s")
     col2.metric("Tokens",  str(perf.get("tokens","—")))
     col3.metric("Gaps",    str(len(gaps)))
     if score > 0:
-        col4.metric("Score", f"{score}/10")
+        if score >= 7:
+            col4.success("Score: " + str(score) + "/10")
+        elif score >= 5:
+            col4.warning("Score: " + str(score) + "/10")
+        else:
+            col4.error("Score: " + str(score) + "/10")
 
     if score > 0 and score < 6:
-        st.error(f"⚠️ Critic scored {score}/10 — below quality threshold.")
+        st.error("⚠️ Critic scored " + str(score) + "/10 — below quality threshold.")
     elif score >= 7:
-        st.success(f"✓ Critic scored {score}/10")
+        st.success("✓ Report quality: " + str(score) + "/10 — meets target.")
 
     if gaps and not state.get("feedback_loop_used"):
-        st.warning(f"Gaps: {' · '.join(gaps)} — orchestrator will trigger re-search.")
+        st.warning("Gaps identified: " + " · ".join(gaps) + " — orchestrator will re-search.")
 
     with st.expander(
-        f"{AGENT_ICONS.get(last_agent,'')} {AGENT_LABELS.get(last_agent)} output",
+        AGENT_ICONS.get(last_agent,"") + " " + AGENT_LABELS.get(last_agent,"") + " output",
         expanded=True
     ):
         st.markdown(last_out)
 
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("Approve — continue",
-                     type="primary", use_container_width=True):
+        if st.button("Approve — continue", type="primary", use_container_width=True):
             if last_agent == "writer":
                 st.session_state.writer_approved = True
             st.session_state.stage = "orchestrating"
@@ -983,90 +1254,100 @@ elif st.session_state.stage == "review_output":
             st.session_state.stage = "done"
             st.rerun()
 
-# ── DONE ─────────────────────────────────────────────────────
+# ── DONE ──────────────────────────────────────────────────────
 elif st.session_state.stage == "done":
     state       = st.session_state.state
     perf        = st.session_state.performance
     agents_used = state.get("completed_agents",[])
-    tl = sum(m.get("latency",0) for m in perf.values())
-    tt = sum(m.get("tokens",0) for m in perf.values())
-
-    st.subheader("Done")
-    st.success(f"Query: {state['query']}")
-    st.progress(1.0, text="Complete")
-
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Agents",  str(len(agents_used)))
-    col2.metric("Latency", f"{tl:.1f}s")
-    col3.metric("Tokens",  str(tt))
-    col4.metric("Cost",    "$0.00")
-
+    tl    = sum(m.get("latency",0) for m in perf.values())
+    tt    = sum(m.get("tokens",0) for m in perf.values())
     score = state.get("critic_score",-1)
     cs    = state.get("cache_status","miss")
     pt    = state.get("pipeline_type","research")
 
-    st.info(
-        f"Pipeline: `{'Lifestyle' if pt=='lifestyle' else 'Research'}` · "
-        f"Cache: `{cs}` · "
-        f"Score: `{score}/10` · "
-        f"Feedback loop: `{'Yes' if state.get('feedback_loop_used') else 'No'}`"
+    st.subheader("Research Complete")
+    st.success("**" + state["query"] + "**")
+    st.progress(1.0, text="All agents complete")
+
+    col1, col2, col3, col4, col5 = st.columns(5)
+    col1.metric("Agents",  str(len(agents_used)))
+    col2.metric("Latency", str(round(tl,1)) + "s")
+    col3.metric("Tokens",  str(tt))
+    col4.metric("Cost",    "$0.00")
+    if score > 0:
+        col5.metric("Quality", str(score) + "/10",
+                    delta="✓ target met" if score >= 7 else "below target")
+
+    st.caption(
+        "Pipeline: " + pt.title()
+        + " · Cache: " + cs
+        + " · Feedback loop: " + ("Yes" if state.get("feedback_loop_used") else "No")
+        + " · Traces: [LangSmith](https://smith.langchain.com)"
     )
 
     # Store in Chroma
     try:
         final_report = state.get("final_report","")
         if final_report and len(final_report) > 100:
-            run_id = f"run_{int(time.time())}"
+            run_id = "run_" + str(int(time.time()))
             stored = store_run(
-                run_id       = run_id,
-                query        = state.get("query",""),
-                research_output = final_report,
-                intent       = state.get("intent",""),
-                critic_score = score,
-                pipeline_type = pt
+                run_id=run_id,
+                query=state.get("query",""),
+                research_output=final_report,
+                intent=state.get("intent",""),
+                critic_score=score,
+                pipeline_type=pt
             )
             if stored:
-                st.caption(f"✓ Stored in research library")
+                st.caption("✓ Stored in research library · " + run_id)
     except Exception as e:
-        st.caption(f"Library storage skipped: {e}")
+        st.caption("Library storage skipped: " + str(e))
 
-    # Log to metrics
+    # Log metrics
     try:
         logged_id = save_run({
-            "query":              state.get("query"),
-            "intent":             state.get("intent"),
-            "pipeline_type":      pt,
-            "entity_valid":       state.get("entity_valid", True),
-            "agents_used":        agents_used,
-            "total_latency":      tl,
-            "total_tokens":       tt,
-            "critic_score":       score,
-            "writer_approved":    st.session_state.get("writer_approved"),
+            "query":               state.get("query"),
+            "intent":              state.get("intent"),
+            "pipeline_type":       pt,
+            "entity_valid":        state.get("entity_valid", True),
+            "agents_used":         agents_used,
+            "total_latency":       tl,
+            "total_tokens":        tt,
+            "critic_score":        score,
+            "writer_approved":     st.session_state.get("writer_approved"),
             "hallucination_flagged": score > 0 and score < 6,
-            "feedback_loop_used": state.get("feedback_loop_used", False),
-            "cache_status":       cs,
+            "feedback_loop_used":  state.get("feedback_loop_used", False),
+            "cache_status":        cs,
         })
-        st.caption(f"Run logged: {logged_id}")
+        st.caption("Run logged: " + logged_id)
     except Exception as e:
-        st.caption(f"Logging skipped: {e}")
+        st.caption("Logging skipped: " + str(e))
 
-    st.markdown("Traces → [View in LangSmith](https://smith.langchain.com)")
     st.divider()
 
     final = state.get("final_report","No report generated.")
-    tabs  = st.tabs(
-        ["Final Answer"] +
-        [f"{AGENT_ICONS.get(a,'')} {AGENT_LABELS.get(a,a)}" for a in agents_used]
-    )
+    tab_labels = ["Final Report"] + [
+        AGENT_ICONS.get(a,"") + " " + AGENT_LABELS.get(a,a) for a in agents_used
+    ]
+    tabs = st.tabs(tab_labels)
 
     with tabs[0]:
         st.markdown(final)
-        st.download_button(
-            "Download report",
-            data=final,
-            file_name=f"report_{state['query'][:30].replace(' ','_')}.md",
-            mime="text/markdown"
-        )
+        col1, col2 = st.columns([1,4])
+        with col1:
+            st.download_button(
+                "Download report",
+                data=(
+                    "# PM Intel Report\n\n"
+                    "**Query:** " + state.get("query","") + "\n"
+                    "**Date:** " + time.strftime("%Y-%m-%d") + "\n"
+                    "**Quality score:** " + str(score) + "/10\n\n"
+                    "---\n\n" + final + "\n\n---\n"
+                    "*Generated by PM Intel · Verify critical facts before business use.*"
+                ),
+                file_name="pm-intel-" + state.get("query","report")[:30].replace(" ","-") + ".md",
+                mime="text/markdown"
+            )
 
     for i, agent in enumerate(agents_used):
         with tabs[i+1]:
@@ -1075,13 +1356,15 @@ elif st.session_state.stage == "done":
     with st.expander("Execution log", expanded=False):
         for entry in st.session_state.get("agent_log",[]):
             st.markdown(
-                f"**{AGENT_ICONS.get(entry['agent'],'')} "
-                f"{AGENT_LABELS.get(entry['agent'])}** — {entry['latency']}s"
+                "**" + AGENT_ICONS.get(entry['agent'],"") + " "
+                + AGENT_LABELS.get(entry['agent'],"") + "** — "
+                + str(entry['latency']) + "s"
             )
             st.caption(entry["output"][:300]+"...")
             st.divider()
 
-    if st.button("New query", type="primary"):
+    st.divider()
+    if st.button("New research query", type="primary"):
         for k in ["stage","state","performance","agent_log","plan"]:
             st.session_state[k] = (
                 "input" if k=="stage" else [] if k=="agent_log" else {}
