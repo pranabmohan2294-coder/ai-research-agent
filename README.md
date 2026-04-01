@@ -1,7 +1,6 @@
 # PM Intel — AI Competitive Intelligence for Product Managers
 
 **Live app: https://pm-research-agent.streamlit.app/**
-**Dev mode: https://pm-research-agent.streamlit.app/?mode=dev**
 
 > Built as a 30-day AI PM learning sprint capstone. Integrates Vector DB, RAG, multi-agent orchestration, and observability into a single production-grade product.
 
@@ -319,6 +318,6 @@ python3 metrics_logger.py
 ## Author
 
 Pranab Mohan
-AI Product Manager — 30-Day Learning Sprint
+AI Product Manager
 github.com/pranabmohan2294-coder
 pranab.mohan2294@gmail.com
