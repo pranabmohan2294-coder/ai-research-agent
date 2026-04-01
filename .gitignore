@@ -1,2 +1,4 @@
 .env
 chroma_db/
+metrics_log.json
+agent_comms_log.json
