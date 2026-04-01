@@ -62,31 +62,55 @@ NVIDIA_MODEL = 'meta/llama-3.1-8b-instruct'
 class NvidiaLLM:
     def invoke(self, prompt):
         text = prompt if isinstance(prompt, str) else str(prompt)
-        completion = nvidia_client.chat.completions.create(
-            model=NVIDIA_MODEL,
-            messages=[{'role': 'user', 'content': text}],
-            temperature=0.2,
-            max_tokens=2048,
-            stream=False
-        )
-        class R:
-            content = completion.choices[0].message.content or ''
-        return R()
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                completion = nvidia_client.chat.completions.create(
+                    model=NVIDIA_MODEL,
+                    messages=[{'role': 'user', 'content': text}],
+                    temperature=0.2,
+                    max_tokens=2048,
+                    stream=False,
+                    timeout=60
+                )
+                class R:
+                    content = completion.choices[0].message.content or ''
+                return R()
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    time.sleep(2)
+                    continue
+                class R:
+                    content = ''
+                return R()
 
     def stream(self, prompt):
         text = prompt if isinstance(prompt, str) else str(prompt)
-        completion = nvidia_client.chat.completions.create(
-            model=NVIDIA_MODEL,
-            messages=[{'role': 'user', 'content': text}],
-            temperature=0.2,
-            max_tokens=2048,
-            stream=True
-        )
-        for chunk in completion:
-            if chunk.choices and chunk.choices[0].delta.content:
-                class C:
-                    content = chunk.choices[0].delta.content
-                yield C()
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                completion = nvidia_client.chat.completions.create(
+                    model=NVIDIA_MODEL,
+                    messages=[{'role': 'user', 'content': text}],
+                    temperature=0.2,
+                    max_tokens=2048,
+                    stream=True,
+                    timeout=60
+                )
+                for chunk in completion:
+                    if chunk.choices and chunk.choices[0].delta.content:
+                        class C:
+                            content = chunk.choices[0].delta.content
+                        yield C()
+                return
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    time.sleep(2)
+                    continue
+                class ErrChunk:
+                    content = "[Connection error — please try again]"
+                yield ErrChunk()
+                return
 
 llm = NvidiaLLM()
 
