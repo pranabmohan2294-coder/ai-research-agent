@@ -1,5 +1,10 @@
 # PM Intel — AI Competitive Intelligence for Product Managers
 
+**Live app: https://pm-research-agent.streamlit.app/**
+**Dev mode: https://pm-research-agent.streamlit.app/?mode=dev**
+
+> Built as a 30-day AI PM learning sprint capstone. Integrates Vector DB, RAG, multi-agent orchestration, and observability into a single production-grade product.
+
 A production-grade multi-agent AI research pipeline that handles any query type — competitive analysis, market research, comparisons, recipes, travel — through a single entry point. Built as a 30-day AI PM learning sprint capstone.
 
 ---
