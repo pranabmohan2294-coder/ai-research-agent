@@ -896,6 +896,7 @@ with st.sidebar:
         st.divider()
         st.success("LangSmith on")
         st.markdown("[View traces →](https://smith.langchain.com)")
+        st.markdown("[Live metrics →](https://docs.google.com/spreadsheets/d/1Qfrt7afqBYDiv5THOtBvHCC-puomjWK_Dm1MpFWTzJU/edit)")
 
     else:
         # Public sidebar — 3 steps only
