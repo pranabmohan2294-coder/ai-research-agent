@@ -301,8 +301,7 @@ def extract_key_sections(text, max_chars=4000):
     """Extract most relevant sections — drop sources and gaps to reduce token count."""
     if len(text) <= max_chars:
         return text
-    lines = text.split("
-")
+    lines = text.split("\n")
     key_lines = []
     chars = 0
     skip_sections = [
