@@ -547,16 +547,9 @@ def run_web_researcher(state, placeholder, custom_queries=None):
             output += chunk.content
             placeholder.markdown(output)
     else:
-        # On cloud use minimal prompt — no meta system, just core task
+    else:
         placeholder.info("Analysing sources...")
-        minimal_prompt = (
-            "You are a research agent. Answer this query using ONLY the search results below.\n"
-            "Cite [Result N] for every fact. Write 'not found in sources' for missing data.\n\n"
-            "Query: " + query + "\n\n"
-            "Search Results:\n" + all_results[:4000] + "\n\n"
-            + relevance + "\nMinimum 200 words."
-        )
-        result = llm.invoke(minimal_prompt)
+        result = llm.invoke(prompt)
         output = result.content
         placeholder.success("Sources analysed — " + str(count) + " results processed")
     return output
@@ -607,8 +600,8 @@ def run_writer(state, placeholder):
     dev     = is_dev_mode()
 
     all_research = "\n\n".join(
-        "=== " + k.upper() + " ===\n" + extract_key_sections(v, max_chars=4000)
-        for k, v in outputs.items()
+    all_research = "\n\n".join(
+        "=== " + k.upper() + " ===\n" + v for k, v in outputs.items()
     )
 
     if fmt == "competitive_report":
@@ -720,7 +713,7 @@ def run_critic(state, placeholder):
             output += chunk.content
             placeholder.markdown(output)
     else:
-        placeholder.info("Reviewing report quality...")
+        placeholder.info("Reviewing report quality and checking facts...")
         output = llm.invoke(prompt).content
         placeholder.success("Review complete")
 
