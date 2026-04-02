@@ -104,5 +104,187 @@
     "cache_status": "hit",
     "timestamp": "2026-03-28T14:53:31.978304",
     "run_id": "run_0005"
+  },
+  {
+    "query": "Best places to visit in Goa in December",
+    "intent": "places",
+    "pipeline_type": "lifestyle",
+    "entity_valid": true,
+    "agents_used": [
+      "web_researcher",
+      "writer"
+    ],
+    "total_latency": 42.7,
+    "total_tokens": 721,
+    "critic_score": -1,
+    "writer_approved": true,
+    "hallucination_flagged": false,
+    "feedback_loop_used": false,
+    "cache_status": "miss",
+    "timestamp": "2026-04-02T00:08:34.184017",
+    "run_id": "run_0006"
+  },
+  {
+    "query": "Best places to visit in Goa in December",
+    "intent": "places",
+    "pipeline_type": "lifestyle",
+    "entity_valid": true,
+    "agents_used": [
+      "web_researcher",
+      "writer"
+    ],
+    "total_latency": 42.7,
+    "total_tokens": 721,
+    "critic_score": -1,
+    "writer_approved": true,
+    "hallucination_flagged": false,
+    "feedback_loop_used": false,
+    "cache_status": "miss",
+    "timestamp": "2026-04-02T00:08:51.175178",
+    "run_id": "run_0007"
+  },
+  {
+    "query": "Best places to visit in Goa in December",
+    "intent": "places",
+    "pipeline_type": "lifestyle",
+    "entity_valid": true,
+    "agents_used": [
+      "web_researcher",
+      "writer"
+    ],
+    "total_latency": 17.8,
+    "total_tokens": 321,
+    "critic_score": -1,
+    "writer_approved": true,
+    "hallucination_flagged": false,
+    "feedback_loop_used": false,
+    "cache_status": "hit",
+    "timestamp": "2026-04-02T00:09:27.792079",
+    "run_id": "run_0008"
+  },
+  {
+    "query": "Best places to visit in Goa in December",
+    "intent": "places",
+    "pipeline_type": "lifestyle",
+    "entity_valid": true,
+    "agents_used": [
+      "web_researcher",
+      "writer"
+    ],
+    "total_latency": 17.8,
+    "total_tokens": 321,
+    "critic_score": -1,
+    "writer_approved": true,
+    "hallucination_flagged": false,
+    "feedback_loop_used": false,
+    "cache_status": "hit",
+    "timestamp": "2026-04-02T00:09:29.628221",
+    "run_id": "run_0009"
+  },
+  {
+    "query": "Role of AI in Product Management in 2026 ?",
+    "intent": "competitive_analysis",
+    "pipeline_type": "research",
+    "entity_valid": true,
+    "agents_used": [
+      "web_researcher",
+      "writer",
+      "critic",
+      "gap_researcher"
+    ],
+    "total_latency": 106.7,
+    "total_tokens": 1624,
+    "critic_score": 7,
+    "writer_approved": true,
+    "hallucination_flagged": false,
+    "feedback_loop_used": true,
+    "cache_status": "miss",
+    "timestamp": "2026-04-02T00:12:11.623814",
+    "run_id": "run_0010"
+  },
+  {
+    "query": "Role of AI in Product Management in 2026 ?",
+    "intent": "competitive_analysis",
+    "pipeline_type": "research",
+    "entity_valid": true,
+    "agents_used": [
+      "web_researcher",
+      "writer",
+      "critic",
+      "gap_researcher"
+    ],
+    "total_latency": 106.7,
+    "total_tokens": 1624,
+    "critic_score": 7,
+    "writer_approved": true,
+    "hallucination_flagged": false,
+    "feedback_loop_used": true,
+    "cache_status": "miss",
+    "timestamp": "2026-04-02T00:13:08.207890",
+    "run_id": "run_0011"
+  },
+  {
+    "query": "competitive landscape for AI coding assistants in 2025",
+    "intent": "market_research",
+    "pipeline_type": "research",
+    "entity_valid": true,
+    "agents_used": [
+      "web_researcher",
+      "writer",
+      "critic",
+      "gap_researcher"
+    ],
+    "total_latency": 48.3,
+    "total_tokens": 1444,
+    "critic_score": 7,
+    "writer_approved": true,
+    "hallucination_flagged": false,
+    "feedback_loop_used": true,
+    "cache_status": "hit",
+    "timestamp": "2026-04-02T00:45:21.899720",
+    "run_id": "run_0012"
+  },
+  {
+    "query": "competitive landscape for AI coding assistants in 2025",
+    "intent": "market_research",
+    "pipeline_type": "research",
+    "entity_valid": true,
+    "agents_used": [
+      "web_researcher",
+      "writer",
+      "critic",
+      "gap_researcher"
+    ],
+    "total_latency": 48.3,
+    "total_tokens": 1444,
+    "critic_score": 7,
+    "writer_approved": true,
+    "hallucination_flagged": false,
+    "feedback_loop_used": true,
+    "cache_status": "hit",
+    "timestamp": "2026-04-02T00:46:01.304035",
+    "run_id": "run_0013"
+  },
+  {
+    "query": "Compare Cursor AI vs GitHub Copilot for enterprise software teams in 2025",
+    "intent": "competitive_analysis",
+    "pipeline_type": "research",
+    "entity_valid": true,
+    "agents_used": [
+      "web_researcher",
+      "data_analyst",
+      "writer",
+      "critic",
+      "gap_researcher"
+    ],
+    "total_latency": 91.19999999999999,
+    "total_tokens": 1749,
+    "critic_score": 7,
+    "writer_approved": true,
+    "hallucination_flagged": false,
+    "feedback_loop_used": true,
+    "cache_status": "miss",
+    "timestamp": "2026-04-02T00:50:36.588388",
+    "run_id": "run_0014"
   }
 ]

@@ -2,3 +2,4 @@
 chroma_db/
 metrics_log.json
 agent_comms_log.json
+gcp_credentials.json
