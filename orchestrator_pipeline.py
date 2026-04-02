@@ -547,7 +547,6 @@ def run_web_researcher(state, placeholder, custom_queries=None):
             output += chunk.content
             placeholder.markdown(output)
     else:
-    else:
         placeholder.info("Analysing sources...")
         result = llm.invoke(prompt)
         output = result.content
