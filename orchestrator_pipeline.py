@@ -297,6 +297,37 @@ def classify_research_intent(query):
             "key_entities": []
         }
 
+def extract_key_sections(text, max_chars=4000):
+    """Extract most relevant sections — drop sources and gaps to reduce token count."""
+    if len(text) <= max_chars:
+        return text
+    lines = text.split("
+")
+    key_lines = []
+    chars = 0
+    skip_sections = [
+        "## Sources",
+        "## What Was NOT Found",
+        "## What Was Not Found",
+        "## Data Gaps",
+        "## Places Excluded",
+    ]
+    skipping = False
+    for line in lines:
+        if any(s in line for s in skip_sections):
+            skipping = True
+        if line.startswith("##") and not any(s in line for s in skip_sections):
+            skipping = False
+        if not skipping:
+            key_lines.append(line)
+            chars += len(line)
+            if chars > max_chars:
+                key_lines.append("
+[Research truncated — full version in researcher tab]")
+                break
+    return "
+".join(key_lines)
+
 def decide_next_agent(state):
     completed    = state.get("completed_agents", [])
     needs_data   = st.session_state.get("plan", {}).get("needs_data_analyst", False)
@@ -554,8 +585,12 @@ def run_writer(state, placeholder):
     fmt     = st.session_state.get("plan",{}).get("output_format","research_report")
     dev     = is_dev_mode()
 
-    all_research = "\n\n".join(
-        "=== " + k.upper() + " ===\n" + v for k, v in outputs.items()
+    all_research = "
+
+".join(
+        "=== " + k.upper() + " ===
+" + extract_key_sections(v, max_chars=4000)
+        for k, v in outputs.items()
     )
 
     if fmt == "competitive_report":
