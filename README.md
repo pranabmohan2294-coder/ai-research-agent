@@ -1,10 +1,9 @@
 # PM Intel — AI Competitive Intelligence for Product Managers
 
 **Live app: https://pm-research-agent.streamlit.app/**
+**Dev mode: https://pm-research-agent.streamlit.app/?mode=dev**
 
 > Built as a 30-day AI PM learning sprint capstone. Integrates Vector DB, RAG, multi-agent orchestration, and observability into a single production-grade product.
-
-A production-grade multi-agent AI research pipeline that handles any query type — competitive analysis, market research, comparisons, recipes, travel — through a single entry point. Built as a 30-day AI PM learning sprint capstone.
 
 ---
 
@@ -35,11 +34,11 @@ Intent Confirmation — shows interpretation before any agent runs
 │  🔎 Gap Researcher (read — auto, critic-triggered)  │
 └─────────────────────────────────────────────────────┘
       ↓
-Results stored in Chroma (persistent research library)
+Results stored in Chroma locally (persistent research library)
+      ↓
+Every run logged to Google Sheets (live cross-session tracking)
       ↓
 Agent handoffs logged to agent_comms_log.json
-      ↓
-Metrics logged to metrics_log.json
       ↓
 LangSmith traces every LLM call
       ↓
@@ -48,32 +47,42 @@ Final Report + Download
 
 ---
 
+## Public vs Developer Mode
+
+| Feature | Public mode | Dev mode (?mode=dev) |
+|---|---|---|
+| Pipeline visibility | 3 steps: Finding / Generating / Optimising | Full agent-by-agent view |
+| Agent names | Hidden | Visible |
+| Token counts | Hidden | Visible per agent |
+| LangSmith link | Hidden | Visible |
+| Google Sheets link | Hidden | Visible in sidebar |
+| Write checkpoints | Automatic | Manual approval |
+| Query limit | 2 per session | Unlimited |
+| Execution log | Hidden | Visible |
+
+---
+
 ## Meta System Message — Shared Agent Identity
 
-Every agent receives a shared system message before its task prompt via `build_prompt()`. This enforces consistent behaviour across the entire pipeline.
+Every agent receives a shared system message before its task prompt via `build_prompt()`:
 ```
-[SYSTEM — applies to ALL agents]
+Rules for ALL agents:
 1. Never invent facts not in your inputs
 2. Cite sources for every specific claim
 3. Write "not found in sources" when data is unavailable
 4. Stay within the geographic and topical scope of the query
 5. Another agent will review your output — accuracy over completeness
 6. The final reader is a PM making real business decisions
-
-[YOUR ROLE — per agent]
-Researcher: retrieve and synthesise from search results only
-Analyst: extract quantitative data — never estimate
-Writer: synthesise into PM report — every claim must cite a source
-Critic: quality-control — flag exact claims that lack citations
-Gap Researcher: fill specific gaps identified by Critic only
 ```
+
+Each agent also has a role-specific persona — researcher, analyst, writer, critic, gap researcher.
 
 ---
 
 ## Agent Communications Logger
 
-Every agent handoff is logged to `agent_comms_log.json` with full audit trail.
-```python
+Every agent handoff logged to `agent_comms_log.json`:
+```json
 {
   "run_id": "run_1775068713",
   "from_agent": "writer",
@@ -81,49 +90,58 @@ Every agent handoff is logged to `agent_comms_log.json` with full audit trail.
   "query": "Competitive landscape for AI coding assistants",
   "input":  { "tokens": 450, "preview": "..." },
   "output": { "tokens": 820, "preview": "..." },
-  "state": {
-    "completed_agents": ["web_researcher", "writer"],
-    "critic_score": -1,
-    "gaps": [],
-    "cache_status": "miss"
-  }
+  "state": { "completed_agents": [...], "critic_score": 7 }
 }
 ```
 
-View stats:
+---
+
+## Google Sheets — Live Run Tracking
+
+Every completed run on the live app logs to Google Sheets permanently:
+
+| Column | Example |
+|---|---|
+| Timestamp | 2026-04-02 17:18:17 |
+| Query | CRM tools for SMBs in India |
+| Intent | competitive_analysis |
+| Critic Score | 8 |
+| Latency | 84s |
+| Cache Status | miss |
+| Quality Label | Excellent |
+
+View live dashboard:
 ```bash
-python3 agent_comms_logger.py
+python3 -m streamlit run sheets_dashboard.py --server.port 8503
 ```
 
 ---
 
-## Chroma Persistence — Research Library
+## Chroma Persistence — Local Research Library
 
-Every completed run is stored in Chroma as a vector. Before web search, the system checks for similar past research.
+| Zone | Distance | Behaviour |
+|---|---|---|
+| Zone 1 — Cache hit | < 0.15 | Skip web search — instant |
+| Zone 2 — Hybrid | 0.15–0.40 | Cache as context + fresh search |
+| Zone 3 — Miss | > 0.40 | Full pipeline — store after |
 
-| Zone | Distance | Age | Quality | Behaviour |
-|---|---|---|---|---|
-| Zone 1 — Cache hit | < 0.15 | Fresh < 14d | Score ≥ 5 | Skip web search — instant |
-| Zone 2 — Hybrid | 0.15–0.40 | Any | Any | Cache as context + fresh search |
-| Zone 3 — Miss | > 0.40 | Any | Any | Full pipeline — store after |
+Age expiry: 14 days. Quality gate: critic score < 5 bypasses cache.
 
 ---
 
-## Human-in-the-Loop — Read vs Write
+## Human-in-the-Loop
 
-| Agent | Type | Checkpoint | Why |
-|---|---|---|---|
-| Web Researcher | Read | No | Gathering info — reversible |
-| Data Analyst | Read | No | Processing info — reversible |
-| Gap Researcher | Read | No | Filling gaps — reversible |
-| Writer | Write | Yes | Produces content — irreversible |
-| Critic | Write | Yes | Modifies report — irreversible |
+| Agent | Type | Checkpoint |
+|---|---|---|
+| Web Researcher | Read | No — auto |
+| Data Analyst | Read | No — auto |
+| Gap Researcher | Read | No — auto |
+| Writer | Write | Yes — approval required |
+| Critic | Write | Yes — review required |
 
 ---
 
 ## Writer Self-Correction
-
-The Writer runs two LLM calls per report:
 ```
 Draft report generated
       ↓
@@ -132,91 +150,32 @@ Self-review against 5-point checklist:
 2. PM recommendations specific with evidence + action + risk?
 3. Executive summary names companies and includes a number?
 4. Market share cited or explicitly stated unavailable?
-5. Any invented facts not in research? Remove them.
+5. Any invented facts? Remove them.
       ↓
 Improved report returned to Critic
 ```
 
 ---
 
-## Intent-Aware Output Formats
-
-| Intent | Output format | Example query |
-|---|---|---|
-| competitive_analysis | Competitive map + player deep-dives + PM recommendations | "AI coding assistants 2025" |
-| comparison | Head-to-head table + use case fit + decision framework | "LangGraph vs CrewAI" |
-| market_research | Sizing + growth + opportunities + risks | "Indian fintech market" |
-| general_research | Findings + analysis + evidence + recommendations | "RAG optimisation" |
-| recipe | Ingredients + method + tips | "butter chicken recipe" |
-| places | Geographic-constrained place list + tips | "best places in Goa" |
-| food | Categorised dishes + healthy options | "what to eat in Tokyo" |
-| howto | Step-by-step guide + common mistakes | "how to set up RAG" |
-
----
-
 ## Metrics Tracked
 
-| Metric | Target | Tracked in |
+| Metric | Target | Source |
 |---|---|---|
-| Critic score median | ≥ 7/10 | metrics_log.json |
-| Latency p95 | < 120s | metrics_log.json |
+| Critic score median | ≥ 7/10 | Google Sheets + metrics_log.json |
+| Latency p95 | < 120s | Google Sheets + metrics_log.json |
 | Approval rate | > 85% | metrics_log.json |
-| Hallucination flag rate | < 10% | metrics_log.json |
+| Hallucination flag rate | < 10% | Google Sheets |
 | Cache hit rate | tracked | metrics_log.json |
 | Agent handoff tokens | tracked | agent_comms_log.json |
-
-View live dashboard:
-```bash
-python3 -m streamlit run metrics_dashboard.py
-```
-
----
-
-## PRD Summary
-
-### Model card
-- Primary: llama3.2 via Ollama (local, free, 3B params)
-- Hallucination rate: ~20-30% on unknown entities
-- Intended use: research and synthesis of publicly available information
-- Not for: legal, financial, medical decisions
-
-### Evaluation criteria
-- Critic score median > 7/10
-- Latency p95 < 120s
-- Approval rate > 85%
-- Hallucination flag rate < 10%
-
-### Fallback design
-- Search unavailable → Chroma cached research (implemented)
-- Insufficient data → honest "not found" report (implemented)
-- Entity not found → warning + confirmation required (implemented)
-- Low quality cache → quality gate bypasses cache (implemented)
 
 ---
 
 ## Responsible AI
 
-- EU AI Act: minimal risk tier — research assistance, no automated decisions about people
-- Bias risks: geographic bias (US/EU sources), recency bias, source quality bias
-- Guardrails: entity validation, human-in-the-loop on write ops, "not found in sources" enforcement, critic hallucination check
-- Known gap: no automated faithfulness scoring — V2 priority
-- Every downloaded report includes quality score and verification disclaimer
-
----
-
-## Tradeoffs — V1 vs V2
-
-| Dimension | Current V1 | Production V2 |
-|---|---|---|
-| LLM | llama3.2 local (3B) | Claude Sonnet hosted |
-| Search | DuckDuckGo snippets | Tavily full-page retrieval |
-| Parallelism | Sequential — Ollama queues | True concurrent with hosted LLM |
-| State persistence | Streamlit session only | LangGraph checkpointer + DB |
-| Error handling | None | Retry + exponential backoff |
-| Entity validation | Explicit fictional indicators | Wikipedia + Crunchbase API |
-| Cache expiry | 14-day fixed | Configurable per intent |
-| Cost tracking | Word estimate | Helicone exact cost per run |
-| Agent architecture | Single file | Split agent modules |
+- EU AI Act: minimal risk tier
+- Bias risks: geographic bias, recency bias, source quality bias
+- Guardrails: entity validation, human-in-the-loop on write ops, critic hallucination check
+- Every downloaded report includes quality score and AI disclaimer
 
 ---
 
@@ -224,61 +183,72 @@ python3 -m streamlit run metrics_dashboard.py
 
 | Component | Tool |
 |---|---|
-| LLM | Ollama llama3.2 (local, free) |
-| Vector DB | Chroma (persistent, HNSW indexing) |
-| Embeddings | all-MiniLM-L6-v2 (sentence-transformers) |
+| LLM | Groq llama-3.1-8b-instant (hosted, free) |
+| Vector DB | Chroma (local, HNSW indexing) |
+| Embeddings | all-MiniLM-L6-v2 (local) |
 | Web search | DuckDuckGo via ddgs (free) |
 | UI | Streamlit |
 | Observability | LangSmith (free tier) |
-| Metrics | Custom JSON logger |
+| Run tracking | Google Sheets (cross-session) |
+| Local metrics | Custom JSON logger |
 | Agent comms | Custom handoff logger |
-| Cost | $0.00 — fully local |
+| Cost | $0.00 — all free tier |
+
+---
+
+## Tradeoffs — V1 vs V2
+
+| Dimension | Current V1 | Production V2 |
+|---|---|---|
+| LLM | Groq llama-3.1-8b (free) | Claude Sonnet hosted |
+| Search | DuckDuckGo snippets | Tavily full-page retrieval |
+| State persistence | Streamlit session only | LangGraph checkpointer + DB |
+| Error handling | Retry on empty response | Full retry + exponential backoff |
+| Entity validation | Explicit fictional indicators | Wikipedia + Crunchbase API |
+| Cache | Local Chroma only | Cloud Chroma with persistent disk |
+| Cost tracking | Word estimate | Helicone exact cost per run |
 
 ---
 
 ## How to Run
 ```bash
 # Install dependencies
-pip3 install langchain-ollama langchain-core streamlit ddgs \
-             python-dotenv chromadb sentence-transformers
+pip3 install streamlit ddgs python-dotenv openai groq langsmith \
+             gspread google-auth langchain-core==0.2.43
 
 # Set up environment
 cp .env.example .env
-# Add LangSmith API key to .env
-
-# Confirm Ollama is running
-ollama run llama3.2 "say hello"
+# Add GROQ_API_KEY and LANGCHAIN_API_KEY to .env
 
 # Run main app
 python3 -m streamlit run orchestrator_pipeline.py
 
-# Run metrics dashboard
-python3 -m streamlit run metrics_dashboard.py
+# Run Google Sheets live dashboard
+python3 -m streamlit run sheets_dashboard.py --server.port 8503
+
+# Run local metrics dashboard
+python3 -m streamlit run metrics_dashboard.py --server.port 8502
 
 # Check agent communications
 python3 agent_comms_logger.py
-
-# Check Chroma library stats
-python3 chroma_manager.py
-
-# Check run stats
-python3 metrics_logger.py
 ```
 
 ---
 
 ## File Structure
 ```
-├── orchestrator_pipeline.py  # Main app — unified entry point
-├── agent_comms_logger.py     # Agent handoff audit trail
-├── chroma_manager.py         # Chroma 3-zone retrieval
-├── metrics_logger.py         # Run logging and stats
-├── metrics_dashboard.py      # Streamlit metrics dashboard
-├── app_streamlit.py          # Day 18-19 legacy
-├── agent_pipeline.py         # Day 18 terminal legacy
-├── requirements.txt
-├── .env                      # API keys (gitignored)
-├── .env.example
+├── orchestrator_pipeline.py      # Main app — unified entry point
+├── orchestrator_pipeline_dev.py  # Dev backup — full version
+├── sheets_dashboard.py           # Google Sheets live dashboard
+├── metrics_dashboard.py          # Local metrics dashboard
+├── sheets_logger.py              # Google Sheets run logger
+├── agent_comms_logger.py         # Agent handoff audit trail
+├── chroma_manager.py             # Chroma stub (cloud) / full (local)
+├── metrics_logger.py             # Local run logging
+├── app_streamlit.py              # Day 18-19 legacy
+├── agent_pipeline.py             # Day 18 terminal legacy
+├── requirements.txt              # Cloud dependencies
+├── .env.example                  # API key template
 └── README.md
 ```
 
@@ -299,19 +269,18 @@ python3 metrics_logger.py
 | Day 26 | Responsible AI + red-team report | ✓ Done |
 | Day 27 | UI polish + intent-aware researcher + writer self-correction | ✓ Done |
 | Day 28 | Meta system message + agent comms logger | ✓ Done |
-| Day 29 | Landing page + Loom demo | Next |
-| Day 30 | Retrospective + portfolio packaging | Upcoming |
+| Day 29 | Public UI + Groq LLM + Streamlit Cloud deployment | ✓ Done |
+| Day 30 | Retrospective + portfolio packaging | Tomorrow |
 
 ---
 
 ## Known Limitations
 
-- llama3.2 hallucinates on unknown entities — entity validation partially mitigates
+- Groq free tier: 14,400 requests/day — sufficient for portfolio demo
 - DuckDuckGo snippets — market share data often missing
-- No true parallelism on local Ollama setup
 - No session persistence — browser close loses pipeline progress
+- Chroma only works locally — cloud runs have no cache
 - Feedback loop capped at 1
-- Deployment requires hosted LLM — architecture is deployment-ready pending API credits
 
 ---
 
@@ -319,5 +288,4 @@ python3 metrics_logger.py
 
 Pranab Mohan
 AI Product Manager
-github.com/pranabmohan2294-coder
 pranab.mohan2294@gmail.com
