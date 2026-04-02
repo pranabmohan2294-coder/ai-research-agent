@@ -543,9 +543,16 @@ def run_web_researcher(state, placeholder, custom_queries=None):
             output += chunk.content
             placeholder.markdown(output)
     else:
-        # Non-streaming more reliable on cloud
+        # On cloud use minimal prompt — no meta system, just core task
         placeholder.info("Analysing sources...")
-        result = llm.invoke(prompt)
+        minimal_prompt = (
+            "You are a research agent. Answer this query using ONLY the search results below.\n"
+            "Cite [Result N] for every fact. Write 'not found in sources' for missing data.\n\n"
+            "Query: " + query + "\n\n"
+            "Search Results:\n" + all_results[:4000] + "\n\n"
+            + relevance + "\nMinimum 200 words."
+        )
+        result = llm.invoke(minimal_prompt)
         output = result.content
         placeholder.success("Sources analysed — " + str(count) + " results processed")
     return output
