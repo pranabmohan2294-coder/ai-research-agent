@@ -633,15 +633,16 @@ def run_writer(state, placeholder):
         + structure + "\nMinimum 600 words."
     )
     draft_prompt = build_prompt("writer", query, draft_core)
-    draft = ""
-    for chunk in llm.stream(draft_prompt):
-        draft += chunk.content
-        if dev:
-            placeholder.markdown(draft)
-
     if dev:
+        placeholder.info("Writer drafting report...")
+        draft = ""
+        for chunk in llm.stream(draft_prompt):
+            draft += chunk.content
+            placeholder.markdown(draft)
         placeholder.info("Writer self-reviewing...")
     else:
+        placeholder.info("Writing your research report...")
+        draft = llm.invoke(draft_prompt).content
         placeholder.info("Refining report quality...")
 
     check_core = (
@@ -654,13 +655,14 @@ def run_writer(state, placeholder):
         "Draft:\n" + draft + "\n\nReturn improved report only."
     )
     check_prompt = build_prompt("writer", query, check_core)
-    improved = ""
-    for chunk in llm.stream(check_prompt):
-        improved += chunk.content
-        if dev:
-            placeholder.markdown(improved)
 
-    if not dev:
+    if dev:
+        improved = ""
+        for chunk in llm.stream(check_prompt):
+            improved += chunk.content
+            placeholder.markdown(improved)
+    else:
+        improved = llm.invoke(check_prompt).content
         placeholder.success("Report ready for your review")
     return improved
 
@@ -692,11 +694,15 @@ def run_critic(state, placeholder):
         "## Final Verdict\nScore X/10. One improvement suggestion."
     )
     prompt = build_prompt("critic", query, core)
-    output = ""
-    for chunk in llm.stream(prompt):
-        output += chunk.content
-        if dev:
+    if dev:
+        output = ""
+        for chunk in llm.stream(prompt):
+            output += chunk.content
             placeholder.markdown(output)
+    else:
+        placeholder.info("Reviewing report quality...")
+        output = llm.invoke(prompt).content
+        placeholder.success("Review complete")
 
     gaps = []
     if not fb_used:
