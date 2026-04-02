@@ -1,11 +1,8 @@
-langchain-core==0.2.43
 streamlit
 ddgs
 python-dotenv
-chromadb==0.4.24
-sentence-transformers
 openai
 langsmith
-protobuf==3.20.3
 gspread
 google-auth
+langchain-core==0.2.43
