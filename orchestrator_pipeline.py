@@ -9,7 +9,7 @@ import time
 import json
 import re
 from typing import TypedDict, List, Dict
-from openai import OpenAI as NvidiaClient
+from openai import OpenAI as GroqClient
 from ddgs import DDGS
 from metrics_logger import save_run, extract_critic_score, get_summary_stats
 from chroma_manager import check_cache, store_run, get_chroma_stats, is_available as chroma_available
@@ -58,11 +58,11 @@ class OrchestratorState(TypedDict):
 # LLM
 # ---------------------------
 
-nvidia_client = NvidiaClient(
-    base_url='https://integrate.api.nvidia.com/v1',
-    api_key=os.getenv('NVIDIA_API_KEY')
+groq_client = GroqClient(
+    base_url='https://api.groq.com/openai/v1',
+    api_key=os.getenv('GROQ_API_KEY')
 )
-NVIDIA_MODEL = 'meta/llama-3.1-8b-instruct'
+NVIDIA_MODEL = 'llama-3.1-8b-instant'
 
 class NvidiaLLM:
     def invoke(self, prompt):
@@ -70,7 +70,7 @@ class NvidiaLLM:
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                completion = nvidia_client.chat.completions.create(
+                completion = groq_client.chat.completions.create(
                     model=NVIDIA_MODEL,
                     messages=[{'role': 'user', 'content': text}],
                     temperature=0.2,
@@ -103,7 +103,7 @@ class NvidiaLLM:
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                completion = nvidia_client.chat.completions.create(
+                completion = groq_client.chat.completions.create(
                     model=NVIDIA_MODEL,
                     messages=[{'role': 'user', 'content': text}],
                     temperature=0.2,
