@@ -58,11 +58,15 @@ class OrchestratorState(TypedDict):
 # LLM
 # ---------------------------
 
-groq_client = GroqClient(
-    base_url='https://api.groq.com/openai/v1',
-    api_key=os.getenv('GROQ_API_KEY')
-)
 NVIDIA_MODEL = 'llama-3.1-8b-instant'
+
+def get_groq_client():
+    import streamlit as st
+    key = os.getenv('GROQ_API_KEY') or st.secrets.get('GROQ_API_KEY', '')
+    return GroqClient(
+        base_url='https://api.groq.com/openai/v1',
+        api_key=key
+    )
 
 class NvidiaLLM:
     def invoke(self, prompt):
@@ -70,7 +74,7 @@ class NvidiaLLM:
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                completion = groq_client.chat.completions.create(
+                completion = get_groq_client().chat.completions.create(
                     model=NVIDIA_MODEL,
                     messages=[{'role': 'user', 'content': text}],
                     temperature=0.2,
@@ -103,7 +107,7 @@ class NvidiaLLM:
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                completion = groq_client.chat.completions.create(
+                completion = get_groq_client().chat.completions.create(
                     model=NVIDIA_MODEL,
                     messages=[{'role': 'user', 'content': text}],
                     temperature=0.2,
