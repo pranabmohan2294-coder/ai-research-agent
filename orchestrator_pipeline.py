@@ -321,11 +321,9 @@ def extract_key_sections(text, max_chars=4000):
             key_lines.append(line)
             chars += len(line)
             if chars > max_chars:
-                key_lines.append("
-[Research truncated — full version in researcher tab]")
+                key_lines.append("\n[Research truncated — full version in researcher tab]")
                 break
-    return "
-".join(key_lines)
+    return "\n".join(key_lines)
 
 def decide_next_agent(state):
     completed    = state.get("completed_agents", [])
