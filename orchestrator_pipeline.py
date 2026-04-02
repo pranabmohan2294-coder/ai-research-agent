@@ -529,12 +529,16 @@ def run_web_researcher(state, placeholder, custom_queries=None):
     )
     prompt = build_prompt("web_researcher", query, core)
     output = ""
-    for chunk in llm.stream(prompt):
-        output += chunk.content
-        if dev:
+    if dev:
+        for chunk in llm.stream(prompt):
+            output += chunk.content
             placeholder.markdown(output)
-    if not dev:
-        placeholder.success("Sources gathered — " + str(count) + " results analysed")
+    else:
+        # Non-streaming more reliable on cloud
+        placeholder.info("Analysing sources...")
+        result = llm.invoke(prompt)
+        output = result.content
+        placeholder.success("Sources analysed — " + str(count) + " results processed")
     return output
 
 
