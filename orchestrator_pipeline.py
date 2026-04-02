@@ -582,11 +582,8 @@ def run_writer(state, placeholder):
     fmt     = st.session_state.get("plan",{}).get("output_format","research_report")
     dev     = is_dev_mode()
 
-    all_research = "
-
-".join(
-        "=== " + k.upper() + " ===
-" + extract_key_sections(v, max_chars=4000)
+    all_research = "\n\n".join(
+        "=== " + k.upper() + " ===\n" + extract_key_sections(v, max_chars=4000)
         for k, v in outputs.items()
     )
 
