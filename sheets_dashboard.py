@@ -43,8 +43,8 @@ total = len(df)
 scores = pd.to_numeric(df["Critic Score"], errors="coerce").dropna()
 latencies = pd.to_numeric(df["Latency"], errors="coerce").dropna()
 cache_hits = (df["Cache Status"] == "hit").sum()
-excellent = (df["Quality Label"] == "Excellent").sum()
-strong = (df["Quality Label"] == "Strong").sum()
+excellent = (df.get("Quality Label", df.get("Quality", "")) == "Excellent").sum()
+strong = (df.get("Quality Label", df.get("Quality", "")) == "Strong").sum()
 fb_loops = (df["Feedback Loop"] == "Yes").sum()
 
 col1, col2, col3, col4, col5, col6 = st.columns(6)
@@ -120,7 +120,7 @@ with col1:
 
 with col2:
     st.subheader("Quality Distribution")
-    quality_counts = df["Quality Label"].value_counts()
+    quality_counts = df.get("Quality Label", df.get("Quality", "")).value_counts()
     if len(quality_counts) > 0:
         col_a, col_b, col_c, col_d = st.columns(4)
         labels = ["Excellent", "Strong", "Good", "Fair"]
