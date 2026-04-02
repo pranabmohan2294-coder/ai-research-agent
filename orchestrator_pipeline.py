@@ -74,9 +74,9 @@ class NvidiaLLM:
                     model=NVIDIA_MODEL,
                     messages=[{'role': 'user', 'content': text}],
                     temperature=0.2,
-                    max_tokens=2048,
+                    max_tokens=1200,
                     stream=False,
-                    timeout=60
+                    timeout=120
                 )
                 class R:
                     content = completion.choices[0].message.content or ''
@@ -98,9 +98,9 @@ class NvidiaLLM:
                     model=NVIDIA_MODEL,
                     messages=[{'role': 'user', 'content': text}],
                     temperature=0.2,
-                    max_tokens=2048,
+                    max_tokens=1200,
                     stream=True,
-                    timeout=60
+                    timeout=120
                 )
                 for chunk in completion:
                     if chunk.choices and chunk.choices[0].delta.content:
