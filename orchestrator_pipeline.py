@@ -544,7 +544,7 @@ def run_web_researcher(state, placeholder, custom_queries=None):
             placeholder.markdown(output)
     else:
         # On cloud use minimal prompt — no meta system, just core task
-        placeholder.info("Analysing sources...")
+        placeholder.info("Analysing sources... [CLOUD PATH]")
         minimal_prompt = (
             "You are a research agent. Answer this query using ONLY the search results below.\n"
             "Cite [Result N] for every fact. Write 'not found in sources' for missing data.\n\n"
