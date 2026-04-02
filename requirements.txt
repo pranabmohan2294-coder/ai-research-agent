@@ -7,3 +7,5 @@ sentence-transformers
 openai
 langsmith
 protobuf==3.20.3
+gspread
+google-auth
