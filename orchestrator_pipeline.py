@@ -14,6 +14,11 @@ from ddgs import DDGS
 from metrics_logger import save_run, extract_critic_score, get_summary_stats
 from chroma_manager import check_cache, store_run, get_chroma_stats, is_available as chroma_available
 from agent_comms_logger import log_handoff, get_comms_stats
+try:
+    from sheets_logger import log_run_to_sheets
+    SHEETS_AVAILABLE = True
+except Exception:
+    SHEETS_AVAILABLE = False
 
 # ---------------------------
 # Mode detection
@@ -1493,19 +1498,31 @@ elif st.session_state.stage == "done":
 
     # Log metrics — guard against duplicate logging on re-render
     if not st.session_state.get("run_logged", False):
+        run_data = {
+            "query":               state.get("query"),
+            "intent":              state.get("intent"),
+            "pipeline_type":       pt,
+            "entity_valid":        state.get("entity_valid", True),
+            "agents_used":         agents_used,
+            "total_latency":       tl,
+            "total_tokens":        tt,
+            "critic_score":        score,
+            "writer_approved":     st.session_state.get("writer_approved"),
+            "hallucination_flagged": score > 0 and score < 6,
+            "feedback_loop_used":  state.get("feedback_loop_used", False),
+            "cache_status":        cs,
+            "run_id":              "run_" + str(int(time.time())),
+        }
         try:
-            save_run({
-                "query": state.get("query"), "intent": state.get("intent"),
-                "pipeline_type": pt, "entity_valid": state.get("entity_valid", True),
-                "agents_used": agents_used, "total_latency": tl, "total_tokens": tt,
-                "critic_score": score, "writer_approved": st.session_state.get("writer_approved"),
-                "hallucination_flagged": score > 0 and score < 6,
-                "feedback_loop_used": state.get("feedback_loop_used", False),
-                "cache_status": cs,
-            })
-            st.session_state.run_logged = True
+            save_run(run_data)
         except Exception:
             pass
+        try:
+            if SHEETS_AVAILABLE:
+                log_run_to_sheets(run_data)
+        except Exception:
+            pass
+        st.session_state.run_logged = True
 
     final = state.get("final_report","No report generated.")
 
