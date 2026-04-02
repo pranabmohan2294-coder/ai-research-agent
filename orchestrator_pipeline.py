@@ -268,7 +268,7 @@ def classify_research_intent(query):
         '{\n'
         '  "intent": "competitive_analysis" | "market_research" | "job_research" | "comparison" | "general_research",\n'
         '  "execution_mode": "sequential",\n'
-        '  "needs_data_analyst": true | false,\n'
+        '  "needs_data_analyst": false,\n'
         '  "search_queries": ["specific query with entity names 2025", "second specific query"],\n'
         '  "output_format": "competitive_report" | "comparison_table" | "market_report" | "research_report",\n'
         '  "plain_english_summary": "one sentence what I understood",\n'
