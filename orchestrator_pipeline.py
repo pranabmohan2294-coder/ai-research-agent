@@ -599,7 +599,6 @@ def run_writer(state, placeholder):
     dev     = is_dev_mode()
 
     all_research = "\n\n".join(
-    all_research = "\n\n".join(
         "=== " + k.upper() + " ===\n" + v for k, v in outputs.items()
     )
 
