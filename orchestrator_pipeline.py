@@ -78,12 +78,21 @@ class NvidiaLLM:
                     stream=False,
                     timeout=120
                 )
-                class R:
-                    content = completion.choices[0].message.content or ''
-                return R()
+                result = completion.choices[0].message.content or ''
+                if result.strip():
+                    class R:
+                        content = result
+                    return R()
+                else:
+                    if attempt < max_retries - 1:
+                        time.sleep(3)
+                        continue
+                    class R:
+                        content = ''
+                    return R()
             except Exception as e:
                 if attempt < max_retries - 1:
-                    time.sleep(2)
+                    time.sleep(3)
                     continue
                 class R:
                     content = ''
