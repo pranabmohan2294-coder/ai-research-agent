@@ -289,3 +289,31 @@ python3 agent_comms_logger.py
 Pranab Mohan
 AI Product Manager
 pranab.mohan2294@gmail.com
+
+---
+
+## Recent Updates — April 2026
+
+### Search Upgrade — DuckDuckGo → Tavily
+- Full article text per result (1900-2200 chars vs 150-200)
+- search_depth=advanced extracts complete article body
+- DuckDuckGo fallback if Tavily unavailable
+- Dramatically improves technical topic research quality
+
+### Smart Entity-Aware Classifier
+- Added lookup_entity_context() — quick Tavily lookup before classification
+- Two-step classification: entity lookup → informed query generation
+- Queries generated from actual web content not model training assumptions
+- Correctly identifies new/unknown entities (e.g. TurboQuant as AI compression)
+- Limited to 3 targeted queries × 5 results = 15 focused results to LLM
+
+### Known Issue — LLM Grounding
+- Researcher LLM occasionally hallucinates on unknown entities
+- Grounding instruction added but not fully effective on llama-3.1-8b
+- Fix in progress: cross-encoder re-ranking to filter irrelevant results
+- V2 upgrade: Claude Haiku as researcher for stronger instruction following
+
+### Pending
+- Cross-encoder re-ranking implementation
+- Voice chatbot layer (Whisper + ElevenLabs)
+- Job Search Engine (separate repo)
