@@ -214,21 +214,42 @@ def validate_entity(query):
 # Web search
 # ---------------------------
 
-def web_search(query, max_results=10):
+def web_search(query, max_results=5):
+    # Try Tavily first — full article text
     try:
-        with DDGS() as ddgs:
-            results = list(ddgs.text(query, max_results=max_results, region='wt-wt'))
-        if not results:
-            return "NO_RESULTS: No web results for: " + query
+        from tavily import TavilyClient
+        client = TavilyClient(api_key=os.getenv('TAVILY_API_KEY'))
+        results = client.search(
+            query=query,
+            max_results=max_results,
+            search_depth="advanced"
+        )
+        if not results.get('results'):
+            raise Exception("No results")
         out = ""
-        for i, r in enumerate(results, 1):
+        for i, r in enumerate(results['results'], 1):
             out += "[Result " + str(i) + "]\n"
             out += "Title: " + r.get('title','') + "\n"
-            out += "URL: " + r.get('href','') + "\n"
-            out += "Content: " + r.get('body','') + "\n\n"
+            out += "URL: " + r.get('url','') + "\n"
+            out += "Content: " + r.get('content','') + "\n\n"
         return out
     except Exception as e:
-        return "SEARCH_ERROR: " + str(e)
+        # Fallback to DuckDuckGo if Tavily fails
+        print("[Search] Tavily failed, falling back to DuckDuckGo:", str(e)[:50])
+        try:
+            with DDGS() as ddgs:
+                results = list(ddgs.text(query, max_results=max_results, region='wt-wt'))
+            if not results:
+                return "NO_RESULTS: No web results for: " + query
+            out = ""
+            for i, r in enumerate(results, 1):
+                out += "[Result " + str(i) + "]\n"
+                out += "Title: " + r.get('title','') + "\n"
+                out += "URL: " + r.get('href','') + "\n"
+                out += "Content: " + r.get('body','') + "\n\n"
+            return out
+        except Exception as e2:
+            return "SEARCH_ERROR: " + str(e2)
 
 # ---------------------------
 # Geographic scope extractor
@@ -278,36 +299,88 @@ def detect_lifestyle_intent(query):
         return "howto"
     return "general"
 
+def lookup_entity_context(query):
+    """Quick Tavily lookup to understand what the entity is before classifying."""
+    try:
+        from tavily import TavilyClient
+        client = TavilyClient(api_key=os.getenv('TAVILY_API_KEY'))
+        results = client.search(query=query, max_results=2, search_depth="basic")
+        if results.get('results'):
+            snippets = " ".join([r.get('content','')[:200] for r in results['results'][:2]])
+            return snippets[:400]
+        return ""
+    except Exception:
+        return ""
+
 def classify_research_intent(query):
-    prompt = (
-        'Analyse this research query and return JSON.\n\n'
-        'Query: "' + query + '"\n\n'
-        'Return ONLY valid JSON:\n'
-        '{\n'
-        '  "intent": "competitive_analysis" | "market_research" | "job_research" | "comparison" | "general_research",\n'
-        '  "execution_mode": "sequential",\n'
-        '  "needs_data_analyst": false,\n'
-        '  "search_queries": ["specific query with entity names 2025", "second specific query"],\n'
+    # Step 1 — Quick entity lookup to understand what this is actually about
+    entity_context = lookup_entity_context(query)
+
+    # Step 2 — Generate informed search queries using entity context
+    query_gen_prompt = (
+        "A user wants to research: \"" + query + "\"\n\n"
+        + (("Web search shows this is about: " + entity_context + "\n\n") if entity_context else "")
+        + "Generate exactly 3 search queries to research this topic thoroughly.\n"
+        "Base the queries on the web context above — not assumptions.\n"
+        "Use specific technical terms from the context.\n"
+        "Query 1: technical details and how it works\n"
+        "Query 2: competitive comparison with real alternatives in the same category\n"
+        "Query 3: market impact and business implications\n\n"
+        "Return ONLY a JSON array of 3 strings. Example:\n"
+        '["query one here", "query two here", "query three here"]'
+    )
+
+    search_queries = [query, query + " technical details 2026", query + " competitive analysis"]
+    try:
+        q_response = llm.invoke(query_gen_prompt)
+        q_text = q_response.content.strip()
+        if "```" in q_text:
+            q_text = q_text.split("```")[1].replace("json","").strip()
+        parsed_queries = json.loads(q_text)
+        if isinstance(parsed_queries, list) and len(parsed_queries) >= 2:
+            search_queries = parsed_queries[:3]
+            print("[Classifier] Generated queries:", search_queries)
+    except Exception as e:
+        print("[Classifier] Query generation failed:", str(e)[:50])
+
+    # Step 3 — Classify intent and output format
+    intent_prompt = (
+        "Classify this research query.\n\n"
+        "Query: \"" + query + "\"\n"
+        + (("Context: " + entity_context[:200] + "\n") if entity_context else "")
+        + "\nReturn ONLY valid JSON:\n"
+        "{\n"
+        '  "intent": "competitive_analysis" | "market_research" | "comparison" | "general_research",\n'
         '  "output_format": "competitive_report" | "comparison_table" | "market_report" | "research_report",\n'
         '  "plain_english_summary": "one sentence what I understood",\n'
-        '  "key_entities": ["company1", "product1"]\n'
-        '}'
+        '  "key_entities": ["entity1", "entity2"]\n'
+        "}"
     )
-    response = llm.invoke(prompt)
-    text = response.content.strip()
+
     try:
-        if "```" in text:
-            text = text.split("```")[1].replace("json","").strip()
-        return json.loads(text)
+        i_response = llm.invoke(intent_prompt)
+        i_text = i_response.content.strip()
+        if "```" in i_text:
+            i_text = i_text.split("```")[1].replace("json","").strip()
+        intent_data = json.loads(i_text)
+        return {
+            "intent":               intent_data.get("intent", "general_research"),
+            "execution_mode":       "sequential",
+            "needs_data_analyst":   False,
+            "search_queries":       search_queries,
+            "output_format":        intent_data.get("output_format", "research_report"),
+            "plain_english_summary": intent_data.get("plain_english_summary", "Research about: " + query),
+            "key_entities":         intent_data.get("key_entities", [])
+        }
     except Exception:
         return {
-            "intent": "general_research",
-            "execution_mode": "sequential",
-            "needs_data_analyst": False,
-            "search_queries": [query, query + " 2025 analysis"],
-            "output_format": "research_report",
+            "intent":               "general_research",
+            "execution_mode":       "sequential",
+            "needs_data_analyst":   False,
+            "search_queries":       search_queries,
+            "output_format":        "research_report",
             "plain_english_summary": "Research about: " + query,
-            "key_entities": []
+            "key_entities":         []
         }
 
 def extract_key_sections(text, max_chars=4000):
@@ -477,7 +550,9 @@ def run_web_researcher(state, placeholder, custom_queries=None):
     query         = state["query"]
     fmt           = st.session_state.get("plan",{}).get("output_format","research_report")
     key_entities  = st.session_state.get("plan",{}).get("key_entities",[])
-    queries       = custom_queries or st.session_state.get("plan",{}).get("search_queries",[query])
+    # Limit to 3 most relevant queries to avoid overwhelming the LLM
+    all_queries = custom_queries or st.session_state.get("plan",{}).get("search_queries",[query])
+    queries = all_queries[:3]
     cache_context = state.get("cache_context","")
     dev           = is_dev_mode()
 
@@ -487,7 +562,7 @@ def run_web_researcher(state, placeholder, custom_queries=None):
             placeholder.info("Searching (" + str(i) + "/" + str(len(queries)) + "): " + q)
         else:
             placeholder.info("Searching " + str(i) + " of " + str(len(queries)) + " sources...")
-        all_results += "\n=== SEARCH: " + q + " ===\n" + web_search(q, max_results=8)
+        all_results += "\n=== SEARCH: " + q + " ===\n" + web_search(q, max_results=5)
 
     count = all_results.count("[Result")
     if dev:
@@ -532,7 +607,23 @@ def run_web_researcher(state, placeholder, custom_queries=None):
             "## Sources"
         )
 
+    # Extract titles from results to ground the LLM
+    result_titles = []
+    for line in all_results.split("\n"):
+        if line.startswith("Title:"):
+            result_titles.append(line.replace("Title:", "").strip())
+    titles_str = "\n".join(["- " + t for t in result_titles[:10]])
+
     core = (
+        "CRITICAL GROUNDING INSTRUCTION:\n"
+        "The search results below are about a SPECIFIC topic. "
+        "Read the titles carefully to understand what this is about:\n"
+        + titles_str + "\n\n"
+        "You MUST base your response ONLY on these search results. "
+        "Do NOT use your training knowledge. "
+        "If the results say this is an AI compression algorithm — write about AI compression. "
+        "If results say it is a trading platform — write about trading. "
+        "Follow the results, not your assumptions.\n\n"
         "RULES: Cite [Result N] for every fact. "
         "'not found in sources' for missing data. Skip off-topic results.\n\n"
         "Query: " + query + "\n"
